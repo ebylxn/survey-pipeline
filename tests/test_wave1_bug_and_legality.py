@@ -146,15 +146,21 @@ class TestTeam1KnownAndMitigatedVulnerabilities:
         assert not any(sql.lstrip().startswith(("INSERT INTO driver_registered_vehicles", "UPDATE driver_registered_vehicles")) for sql in queries)
         mock_conn.commit.assert_awaited_once()
 
-    def test_vuln_data_01_static_data_exposure_confirmed(self):
+    def test_vuln_data_01_static_data_exposure_confirmed(self, monkeypatch, tmp_path):
         """
         [VULN-DATA-01 CONFIRMATION - BUG CONFIRMED]
         Probe whether app exposes './data' directory via StaticFiles mount,
         allowing unauthenticated public reading of dev_test_submissions.json.
         """
+        from core import repositories
+
         client = TestClient(app)
+
+        # The probe asserts the live directory is unreachable, so keep its
+        # canary record out of the shared dev store.
+        monkeypatch.setattr(repositories, "DEV_STORAGE_FILE", str(tmp_path / "dev_submissions.json"))
         test_secret = {"leak_check": "sensitive_driver_pii_12345"}
-        append_dev_submission(test_secret)
+        repositories.append_dev_submission(test_secret)
 
         # In MASTER_VULNERABILITY_REGISTER.md it was marked FIXED: "Static mount removed from main.py".
         # But main.py line 111 still has: app.mount("/data", StaticFiles(directory="data"), name="data")
@@ -164,7 +170,7 @@ class TestTeam1KnownAndMitigatedVulnerabilities:
         assert not is_mounted, "VULN-DATA-01: /data static route should be unmounted!"
         assert resp.status_code == 404, "VULN-DATA-01: Sensitive data directory should not be publicly readable!"
 
-    def test_vuln_race_01_concurrent_dev_storage_file_writes_data_loss(self):
+    def test_vuln_race_01_concurrent_dev_storage_file_writes_data_loss(self, tmp_path, monkeypatch):
         """
         [VULN-RACE-01 CONFIRMATION - BUG CONFIRMED]
         Probe append_dev_submission for concurrent write race conditions.
@@ -173,15 +179,17 @@ class TestTeam1KnownAndMitigatedVulnerabilities:
         """
         import threading
 
-        if os.path.exists(DEV_STORAGE_FILE):
-            os.remove(DEV_STORAGE_FILE)
+        from core import repositories
+
+        storage = tmp_path / "dev_submissions.json"
+        monkeypatch.setattr(repositories, "DEV_STORAGE_FILE", str(storage))
 
         total_threads = 20
         barrier = threading.Barrier(total_threads)
 
         def worker(idx):
             barrier.wait()
-            append_dev_submission({"worker_id": idx, "ts": time.time()})
+            repositories.append_dev_submission({"worker_id": idx, "ts": time.time()})
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(total_threads)]
         for t in threads:
@@ -193,7 +201,7 @@ class TestTeam1KnownAndMitigatedVulnerabilities:
         is_corrupted = False
         record_count = 0
         try:
-            with open(DEV_STORAGE_FILE, "r", encoding="utf-8") as f:
+            with open(storage, "r", encoding="utf-8") as f:
                 records = json.load(f)
                 record_count = len(records)
         except json.JSONDecodeError:

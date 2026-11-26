@@ -11,9 +11,9 @@
   ],
   "expected_fields": [
     {"key": "vehicle_type", "label": "Loại phương tiện", "type": "string", "required": false},
-    {"key": "view", "label": "Góc chụp", "type": "string", "required": false},
+    {"key": "view", "label": "Góc chụp", "type": "string", "required": true},
     {"key": "license_plate", "label": "Biển số", "type": "string", "required": false},
-    {"key": "is_authentic", "label": "Ảnh thật", "type": "boolean", "required": false}
+    {"key": "is_authentic", "label": "Ảnh thật", "type": "boolean", "required": true}
   ],
   "customizable": [
     {"key": "require_plate", "label": "Bắt buộc biển số", "type": "toggle", "default": false},

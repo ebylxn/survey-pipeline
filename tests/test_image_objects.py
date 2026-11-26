@@ -4,7 +4,7 @@
 import io
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -247,14 +247,22 @@ def test_conditions_gate_engine_execution():
 
 def test_vehicle_profile_object_engines_read_object_config():
     vehicle = get_object("vehicle_exterior_or_interior")
-    missing_plate = run_definition_checks(vehicle, {"view": "EXTERIOR"}, {"require_plate": True})
+    complete = {"view": "EXTERIOR", "is_authentic": True}
+
+    # A required view/authenticity label is enforced even without an extra
+    # engine binding, so a partly hallucinated OCR response cannot pass.
+    missing_view = run_definition_checks(vehicle, {"is_authentic": True}, {"require_plate": False})
+    assert missing_view["passed"] is False
+    assert "view" in missing_view["reasons"][0]
+
+    missing_plate = run_definition_checks(vehicle, complete, {"require_plate": True})
     assert missing_plate["passed"] is False
     assert "license_plate" in missing_plate["reasons"][0]
 
-    no_plate_required = run_definition_checks(vehicle, {"view": "EXTERIOR"}, {"require_plate": False})
+    no_plate_required = run_definition_checks(vehicle, complete, {"require_plate": False})
     assert no_plate_required["passed"] is True
 
-    bad_view = run_definition_checks(vehicle, {"view": "TRUNK"}, {"require_plate": False})
+    bad_view = run_definition_checks(vehicle, {**complete, "view": "TRUNK"}, {"require_plate": False})
     assert bad_view["passed"] is False
 
     profile = get_object("app_profile")
@@ -806,6 +814,12 @@ def _probe_multi_camera_form(form_id: str):
 
 def test_multi_camera_questions_process_independently(monkeypatch):
     monkeypatch.setenv("MOCK_AI", "1")
+    # OCR is stubbed: this test proves per-question routing, and a real vehicle
+    # object now requires readable evidence instead of passing on no data.
+    monkeypatch.setattr(
+        "core.state.vision_client.extract_object_fields",
+        AsyncMock(return_value={"view": "EXTERIOR", "is_authentic": True}),
+    )
     form_id = "SIM-MULTI-CAMERA-QUESTIONS"
     _probe_multi_camera_form(form_id)
     captured = {}

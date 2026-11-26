@@ -84,10 +84,10 @@ When a customer gives you a sample image, follow this exact checklist before out
 | `key` | string | Yes | Unique `snake_case` key |
 | `label` | string | Yes | Human-readable label |
 | `type` | string | No (`"string"`) | One of: `"string"`, `"integer"`, `"number"`, `"boolean"`, `"array"`, `"object"` |
-| `required` | boolean | No (`false`) | Marks field as required in prompt summary *(note: enforcement requires binding the `required_fields` engine!)* |
+| `required` | boolean | No (`false`) | Enforced: a blank required value rejects the submission, with or without an explicit `required_fields` engine |
 | `description` | `string \| null` | No (`null`) | Optional note |
 
-> **Important**: Setting `"required": true` on an `expected_fields` item only marks it in the AI prompt. To **actually reject** submissions when that field is missing, you MUST also bind the `required_fields` engine in `engines`!
+> **Note**: `"required": true` is enforced by `run_definition_checks`, which runs the shared `required_fields` check when the object has no explicit `required_fields` binding. Mark only fields that a genuine photo must always show; a field the model may legitimately leave blank must stay `false`.
 
 ### 3.3 `CustomizableField` (`extra="forbid"`)
 
@@ -114,6 +114,17 @@ Each condition object has:
 - `field` (required string): extracted field key (e.g. `"amount"`), or `"$config.<customizable_key>"` to gate on a slot config toggle!
 - `op` (optional string, default `"not_empty"`): one of `"not_empty"`, `"empty"`, `"equals"`, `"not_equals"`, `"contains"`, `"regex"`, `"gte"`, `"lte"`.
 - `value` (optional): comparison target for ops other than `"not_empty"` / `"empty"`.
+
+### 3.5 How the object is enforced at submission time
+
+Knowing this prevents a false sense of safety when authoring an object:
+
+- Every uploaded image on a `camera_webrtc` question is routed to the object declared by its slot (`object_type`). Custom `generic` objects and vehicle objects are extracted per slot and checked with their bound engines.
+- `extractor: "generic"` objects call the configured vision model with the object prompt; `extractor: "vehicle"` objects also use that generic extraction path and then run their own engines.
+- **Fail-closed evidence rule:** if an object declares `expected_fields` or `engines` (or uses a `profile` / `income_statement` / `vehicle` extractor) and the extraction returns no readable value at all, the submission is rejected with "Không trích xuất được thông tin từ ảnh để kiểm tra đối tượng yêu cầu." A missing model response never counts as a pass.
+- A required slot with no upload, or an image that never reached a check, is also rejected.
+- `"required": true` on `expected_fields` now rejects a blank value by itself; a `boolean` / `enum` / `number_range` engine adds the value-level rule (e.g. allowed view, authenticity must be true).
+- Objects with no fields and no engines (legacy slots and custom-prompt slots) keep their previous tolerant behavior: there is nothing to validate.
 
 ---
 

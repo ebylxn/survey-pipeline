@@ -386,3 +386,129 @@ async def test_required_income_ocr_failure_cannot_count_as_audited_evidence():
         await pipeline._audit_camera_question(vision, question, [
             {"flat_index": 0, "slot_index": 0, "filename": "income.webp"},
         ], {0: b"normalized"})
+
+
+PERFORMANCE_FIELDS = {
+    "acceptance_rate_pct": 100,
+    "cancellation_rate_pct": 20,
+    "completion_rate_pct": 80,
+    "period_raw_text": "16/11/2026",
+    "capture_source": "SOCIAL_MEDIA_CAPTURE",
+    "is_performance_screen": True,
+    "is_legible": True,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("object_id,extraction,config,status,failure_engine", [
+    ("gsm_performance", PERFORMANCE_FIELDS, {}, "APPROVED", None),
+    ("gsm_performance", {**PERFORMANCE_FIELDS, "acceptance_rate_pct": 0, "cancellation_rate_pct": 0, "completion_rate_pct": 0}, {}, "APPROVED", None),
+    ("gsm_performance", {"is_performance_screen": False, "is_legible": True}, {}, "REJECTED", "required_fields"),
+    ("gsm_performance", {**PERFORMANCE_FIELDS, "is_performance_screen": False}, {}, "REJECTED", "boolean"),
+    ("gsm_performance", {**PERFORMANCE_FIELDS, "acceptance_rate_pct": None}, {}, "REJECTED", "required_fields"),
+    ("gsm_performance", {**PERFORMANCE_FIELDS, "cancellation_rate_pct": None}, {}, "REJECTED", "required_fields"),
+    ("gsm_performance", {**PERFORMANCE_FIELDS, "completion_rate_pct": None}, {}, "REJECTED", "required_fields"),
+    ("gsm_performance", {**PERFORMANCE_FIELDS, "period_raw_text": "16/10/2026"}, {}, "REJECTED", "constraints"),
+    ("gsm_performance", {**PERFORMANCE_FIELDS, "period_raw_text": "16/11/2025"}, {}, "REJECTED", "constraints"),
+    ("gsm_performance", {}, {}, "REJECTED", "object_extraction"),
+    ("vehicle_exterior_or_interior", {}, {}, "REJECTED", "object_extraction"),
+    ("vehicle_exterior_or_interior", {"view": None, "is_authentic": None}, {}, "REJECTED", "object_extraction"),
+    ("vehicle_exterior_or_interior", {"vehicle_type": "CAR"}, {}, "REJECTED", "required_fields"),
+    ("vehicle_exterior_or_interior", {"view": "EXTERIOR"}, {}, "REJECTED", "required_fields"),
+    ("vehicle_exterior_or_interior", {"is_authentic": True}, {}, "REJECTED", "required_fields"),
+    ("vehicle_exterior_or_interior", {"view": "EXTERIOR", "is_authentic": True}, {}, "APPROVED", None),
+    ("vehicle_exterior_or_interior", {"view": "EXTERIOR", "is_authentic": False}, {}, "REJECTED", "vehicle_authentic"),
+    ("vehicle_exterior_or_interior", {"view": "TRUNK", "is_authentic": True}, {}, "REJECTED", "vehicle_view_allowed"),
+    ("vehicle_exterior_or_interior", {"view": "EXTERIOR", "is_authentic": True}, {"require_plate": True}, "REJECTED", "vehicle_plate_required"),
+])
+async def test_object_checks_determine_committed_submission_status(
+    dependencies, monkeypatch, object_id, extraction, config, status, failure_engine,
+):
+    from services.form_engine import FormQuestion, FormSchema, FormSettings, ImageCheckConfig
+
+    camera = FormQuestion(id="proof", title="Evidence", type="camera_webrtc", required=True, image_slots=[
+        {"title": "Evidence", "object_type": object_id, "object_config": config, "required": True},
+    ])
+    schema = FormSchema(form_id="object-audit", title="Object audit", questions=[camera], settings=FormSettings(
+        decree13_required=False, require_manual_review=False,
+        image_checks=ImageCheckConfig(enable_blur_check=False, enable_vehicle_match=False, enable_anti_fraud=False),
+    ))
+    vision = SimpleNamespace(
+        classify_image_role=AsyncMock(return_value="unknown"),
+        extract_object_fields=AsyncMock(return_value=extraction),
+    )
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
+    pending = []
+    deps = replace(dependencies, vision=vision, schedule_legacy=pending.append)
+    monkeypatch.setattr(pipeline, "compute_dinov2_embedding", lambda _image: [1.0])
+    request = pipeline.SubmissionInput(
+        form_id=schema.form_id, schema=schema,
+        uploads=(pipeline.SubmissionUpload("proof", 0, "admin-editor.png", buffer.getvalue()),),
+    )
+
+    async with embedding_executor_lifespan():
+        result = await pipeline.process_submission(request, deps)
+
+    assert result.status == status, result.response
+    row = deps.db_pool.rows[result.submission_id]
+    assert row["status"] == status
+    audit, = json.loads(row["raw_extracted_facts"])["image_object_results"]
+    assert audit["question_id"] == "proof" and audit["slot_index"] == 0
+    assert audit["passed"] is (status == "APPROVED")
+    if failure_engine:
+        assert failure_engine in {item["engine_id"] for item in audit["failures"]}
+
+
+@pytest.mark.asyncio
+async def test_same_custom_object_uses_each_slots_month_and_prompt():
+    from services.form_engine import FormQuestion
+
+    question = FormQuestion(id="months", title="Months", type="camera_webrtc", image_slots=[
+        {"title": "November", "object_type": "gsm_performance", "required": True},
+        {"title": "December", "object_type": "gsm_performance", "required": True,
+         "object_config": {"constraints": [
+             {"field": "period_months", "op": "contains", "value": 12},
+             {"field": "period_years", "op": "contains", "value": 2026},
+         ]}, "ai_detection_prompt": "Read the December evidence."},
+    ])
+    vision = SimpleNamespace(
+        classify_image_role=AsyncMock(return_value="unknown"),
+        extract_object_fields=AsyncMock(side_effect=[
+            PERFORMANCE_FIELDS,
+            {**PERFORMANCE_FIELDS, "period_raw_text": "16/12/2026"},
+        ]),
+    )
+    items = [{"flat_index": idx, "slot_index": idx, "filename": "photo.png"} for idx in range(2)]
+    audit = await pipeline._audit_camera_question(vision, question, items, {0: b"november", 1: b"december"})
+    assert audit["violation"] is None
+    assert [item["passed"] for item in audit["image_object_results"]] == [True, True]
+    assert "Read the December evidence." in vision.extract_object_fields.await_args_list[1].args[1]
+
+
+@pytest.mark.asyncio
+async def test_required_custom_slot_cannot_disappear_from_audit():
+    from services.form_engine import FormQuestion
+
+    question = FormQuestion(id="proof", title="Proof", type="camera_webrtc", image_slots=[
+        {"title": "Performance", "object_type": "gsm_performance", "required": True},
+    ])
+    audit = await pipeline._audit_camera_question(SimpleNamespace(), question, [], {})
+    assert audit["violation"] is not None
+
+
+@pytest.mark.asyncio
+async def test_required_custom_ocr_failure_is_not_silently_approved():
+    from services.form_engine import FormQuestion
+
+    question = FormQuestion(id="proof", title="Proof", type="camera_webrtc", image_slots=[
+        {"title": "Performance", "object_type": "gsm_performance", "required": True},
+    ])
+    vision = SimpleNamespace(
+        classify_image_role=AsyncMock(return_value="gsm_performance"),
+        extract_object_fields=AsyncMock(side_effect=TimeoutError("OCR unavailable")),
+    )
+    with pytest.raises(TimeoutError, match="OCR unavailable"):
+        await pipeline._audit_camera_question(vision, question, [
+            {"flat_index": 0, "slot_index": 0, "filename": "photo.png"},
+        ], {0: b"normalized"})

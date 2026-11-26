@@ -77,6 +77,11 @@ async def submit_camera(monkeypatch, tmp_path):
     async def profile(_image_bytes, *, prompt):
         return {"app": "XANH_SM", "is_authentic": True}
 
+    async def object_fields(_image_bytes, _prompt):
+        # Vehicle slots run their real object engines now, so the stub must
+        # return readable evidence instead of the empty response used before.
+        return {"vehicle_type": "CAR", "view": "EXTERIOR", "is_authentic": True}
+
     async def submit(extract, *, photos=None, classify=classify_camera_role, phone="0988123456"):
         if photos is None:
             photos = [make_test_image(f"camera-slot-{i}") for i in range(7)]
@@ -96,7 +101,7 @@ async def submit_camera(monkeypatch, tmp_path):
         )
         deps = pipeline.SubmissionDependencies(
             vision=SimpleNamespace(classify_image_role=classify, ocr_driver_app_profile=profile,
-                                   ocr_driver_app_income=extract),
+                                   ocr_driver_app_income=extract, extract_object_fields=object_fields),
             media_root=str(tmp_path / "photos"), dev_storage_file=str(dev_file),
             append_dev_record=append_dev_record, image_max_dimension=720, blur_threshold=15,
         )

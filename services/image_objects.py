@@ -482,6 +482,25 @@ def run_definition_checks(
     failures: List[Dict[str, Any]] = [
         {"engine_id": "field_types", "reason": issue, "details": {}} for issue in issues
     ]
+    # A field marked required is mandatory even when the definition forgot to
+    # bind an engine: otherwise a partly hallucinated OCR response passes.
+    if "required_fields" not in {binding.id for binding in obj.engines}:
+        engine_def = registry["engines"].get("required_fields")
+        if engine_def is not None and any(field.required for field in obj.expected_fields):
+            implicit = run_engine(
+                engine_def.model_dump(),
+                {"id": "required_fields", "params": {}},
+                values,
+                config,
+                context={"object": obj.model_dump(), "slot_config": slot_config or {}},
+            )
+            results.append(implicit)
+            if not implicit.get("passed"):
+                failures.append({
+                    "engine_id": implicit["engine_id"],
+                    "reason": implicit.get("reason") or "Thiếu trường dữ liệu bắt buộc.",
+                    "details": implicit.get("details") or {},
+                })
     for binding in obj.engines:
         engine_def = registry["engines"].get(binding.id)
         if engine_def is None:

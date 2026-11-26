@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "id": "gsm_performance",
+  "label": "Hiệu suất hoạt động tài xế GSM",
+  "description": "Màn hình Hiệu suất hoạt động. Bắt buộc tỉ lệ nhận, hủy, hoàn thành chuyến và ngày/kỳ báo cáo để kiểm tra tháng, năm. Mặc định ràng buộc tháng 11/2026 như ảnh mẫu; tùy chỉnh tại slot. Số chuyến, đánh giá và km vận doanh/ODO là tùy chọn. Không xác minh quyền sở hữu số liệu.",
+  "prompt": "You are an OCR transcription engine for the Vietnamese driver app screen titled 'Hiệu suất hoạt động'. Detect: {{objects}}. Expected fields: {{fields}}. Configuration: {{config}}. Mandatory business fields are acceptance_rate_pct, cancellation_rate_pct, completion_rate_pct, and period_raw_text. The reporting date or period is required to validate the configured month and year; this does NOT require the monthly tab. Only transcribe visible values from the underlying performance screen. Never guess, calculate missing values, copy configuration values into extraction, or assume the configured month is present. Ignore social-media captions, usernames, search bars, playback controls, likes, comments, shares, and device status bars. screen_title is the underlying heading or null. period_type is DAILY, WEEKLY, MONTHLY, or null, based only on the visibly selected Ngày/Tuần/Tháng tab. period_raw_text is the verbatim reporting date or full date range in the app, including visible month and year, never the social-media posting date. Preserve both endpoints for date ranges. If the month or year is not visible, do not infer it from configuration or today's date. acceptance_rate_pct, cancellation_rate_pct, and completion_rate_pct are Tỉ lệ nhận chuyến, Tỉ lệ hủy chuyến, and Tỉ lệ hoàn thành chuyến, as numbers on a 0-100 scale (80% becomes 80, not 0.8). completed_trips is only the count beside the completion row. average_rating is only the numeric Đánh giá trung bình value when visible, otherwise null. average_rating_status is its verbatim pending/update message or null. five_star_trips is the count in the Đánh giá 5 sao row, not a star rating; preserve a visible zero as 0. revenue_km_odo_raw is the verbatim numeric or placeholder display in the Tỉ lệ km vận doanh/ODO row, including units; revenue_km_odo_status is its update message or null. Preserve --/-- as text, never zero. capture_source is SOCIAL_MEDIA_CAPTURE if social-media overlays are present, otherwise PHOTO_OF_SCREEN for a physical display photograph, DIRECT_SCREENSHOT for a direct app screenshot, or UNKNOWN when uncertain. Social-media capture takes precedence over photo-of-screen. is_performance_screen is true when the target interface is identifiable from its heading or matching trip-performance rows; false for unrelated or mockup screens. This is not proof of authenticity or ownership. is_legible is true only when the reporting date/period and all three rate labels and values are readable. Missing optional title, trip counts, ratings, or ODO must not make it false. Use null for absent, obscured, or pending values. Never infer one rate from the others or assume they have an arithmetic relationship. Return JSON only.",
+  "objects": [
+    "Hiệu suất hoạt động screen heading",
+    "Ngày / Tuần / Tháng tabs and selected reporting date",
+    "Tỉ lệ nhận chuyến / Tỉ lệ hủy chuyến / Tỉ lệ hoàn thành chuyến rows",
+    "Đánh giá trung bình / Đánh giá 5 sao rows",
+    "Tỉ lệ km vận doanh/ODO row"
+  ],
+  "expected_fields": [
+    {"key": "screen_title", "label": "Tiêu đề màn hình", "type": "string", "required": false},
+    {"key": "period_type", "label": "Loại kỳ (DAILY/WEEKLY/MONTHLY)", "type": "string", "required": false},
+    {"key": "period_raw_text", "label": "Ngày / kỳ hiển thị (bắt buộc tháng, năm)", "type": "string", "required": true},
+    {"key": "acceptance_rate_pct", "label": "Tỉ lệ nhận chuyến (%)", "type": "number", "required": true},
+    {"key": "cancellation_rate_pct", "label": "Tỉ lệ hủy chuyến (%)", "type": "number", "required": true},
+    {"key": "completion_rate_pct", "label": "Tỉ lệ hoàn thành chuyến (%)", "type": "number", "required": true},
+    {"key": "completed_trips", "label": "Số chuyến hoàn thành", "type": "integer", "required": false},
+    {"key": "average_rating", "label": "Đánh giá trung bình", "type": "number", "required": false},
+    {"key": "average_rating_status", "label": "Trạng thái đánh giá trung bình", "type": "string", "required": false},
+    {"key": "five_star_trips", "label": "Số chuyến được đánh giá 5 sao", "type": "integer", "required": false},
+    {"key": "revenue_km_odo_raw", "label": "Km vận doanh/ODO hiển thị", "type": "string", "required": false},
+    {"key": "revenue_km_odo_status", "label": "Trạng thái km vận doanh/ODO", "type": "string", "required": false},
+    {"key": "capture_source", "label": "Nguồn ảnh", "type": "string", "required": true},
+    {"key": "is_performance_screen", "label": "Đúng màn hình hiệu suất", "type": "boolean", "required": true},
+    {"key": "is_legible", "label": "Đọc được thông tin bắt buộc", "type": "boolean", "required": true}
+  ],
+  "customizable": [
+    {
+      "key": "constraints",
+      "label": "Ràng buộc tháng / năm báo cáo",
+      "type": "constraints",
+      "default": [
+        {"field": "period_months", "op": "contains", "value": 11},
+        {"field": "period_years", "op": "contains", "value": 2026}
+      ],
+      "help": "Mặc định tháng 11/2026 theo ảnh mẫu. Sửa cả tháng và năm cho chiến dịch. Các ràng buộc kết hợp AND; kỳ nhiều ngày được phép giao với tháng mục tiêu. Không bắt buộc tab Tháng.",
+      "item_fields": [
+        {"key": "field", "label": "Trường", "type": "select", "options": ["period_months", "period_years"]},
+        {"key": "op", "label": "Điều kiện", "type": "select", "options": ["contains"]},
+        {"key": "value", "label": "Tháng (1–12) / năm", "type": "text"}
+      ]
+    },
+    {
+      "key": "allowed_capture_sources",
+      "label": "Nguồn ảnh cho phép (dấu phẩy)",
+      "type": "text",
+      "default": "DIRECT_SCREENSHOT,PHOTO_OF_SCREEN,SOCIAL_MEDIA_CAPTURE",
+      "help": "Mặc định cho phép ảnh có lớp phủ mạng xã hội như ảnh mẫu. Bỏ SOCIAL_MEDIA_CAPTURE để từ chối loại này. Không xác minh quyền sở hữu hay tính nguyên gốc của ảnh."
+    }
+  ],
+  "engines": [
+    {
+      "id": "required_fields",
+      "label": "Bắt buộc ba tỉ lệ và ngày/kỳ báo cáo",
+      "params": {}
+    },
+    {
+      "id": "constraints",
+      "label": "Đúng tháng và năm báo cáo",
+      "params": {"constraints": "{{constraints}}"}
+    },
+    {
+      "id": "boolean",
+      "label": "Đúng màn hình hiệu suất hoạt động",
+      "params": {
+        "field": "is_performance_screen",
+        "expected": true,
+        "required": true,
+        "message": "Không phát hiện màn hình Hiệu suất hoạt động và các chỉ số chuyến đi."
+      }
+    },
+    {
+      "id": "legible",
+      "label": "Đọc được ba tỉ lệ và ngày/kỳ báo cáo",
+      "params": {
+        "field": "is_legible",
+        "expected": true,
+        "required": true,
+        "message": "Không đọc rõ tỉ lệ nhận, hủy, hoàn thành chuyến hoặc ngày/kỳ báo cáo. Vui lòng chụp lại."
+      }
+    },
+    {
+      "id": "enum",
+      "label": "Nguồn ảnh được phép",
+      "params": {
+        "field": "capture_source",
+        "allowed": "{{allowed_capture_sources}}",
+        "required": true,
+        "message": "Nguồn ảnh không được phép. Vui lòng dùng ảnh chụp màn hình ứng dụng hoặc nguồn được biểu mẫu cho phép."
+      }
+    }
+  ],
+  "extractor": "generic",
+  "enabled": true,
+  "json_output_instruction": true,
+  "classify_role": "gsm_performance"
+}

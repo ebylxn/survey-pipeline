@@ -419,6 +419,13 @@ def _slot_object(slot: Any):
     return resolve_slot_object(slot)
 
 
+def _requires_evidence(obj: Any) -> bool:
+    """An image object can only pass when OCR evidence exists for its rules."""
+    return obj.extractor != "none" and bool(
+        obj.expected_fields or obj.engines or obj.extractor in ("profile", "income_statement", "vehicle")
+    )
+
+
 async def _call_object_extractor(extractor_fn, image_bytes: bytes, week_idx: Optional[int], prompt: str) -> Dict[str, Any]:
     """Call a vision extractor, passing only arguments its real signature accepts."""
     kwargs: Dict[str, Any] = {}
@@ -458,8 +465,6 @@ async def _extract_image_object(
         result = await _call_object_extractor(vision_client.ocr_driver_app_income, image_bytes, week_idx, prompt)
     elif obj.extractor == "profile":
         result = await _call_object_extractor(vision_client.ocr_driver_app_profile, image_bytes, None, prompt)
-    elif obj.extractor == "vehicle":
-        return {}
     else:
         result = await vision_client.extract_object_fields(image_bytes, prompt)
     if hasattr(result, "model_dump"):
@@ -496,11 +501,14 @@ async def _audit_camera_question(
         "role_0": "unknown",
         "slot_0_is_profile": False,
     }
-    if not items:
-        return result
 
     local_norm = [norm_bytes_cache.get(item["flat_index"], b"") for item in items]
     slots = getattr(question, "image_slots", None) or []
+    slot_objects = [_slot_object(slot) for slot in slots]
+    direct_slots = {
+        idx for idx, obj in enumerate(slot_objects)
+        if obj.extractor not in ("profile", "income_statement", "none")
+    }
     classification_slots = _question_classification_slots(question)
     classified_roles = await asyncio.gather(
         *[
@@ -516,13 +524,23 @@ async def _audit_camera_question(
     classified_roles = [role if isinstance(role, str) else "unknown" for role in classified_roles]
     result["role_0"] = classified_roles[0] if classified_roles else "unknown"
 
-    groups = {"profile": [], "vehicle": [], "income": []}
+    groups = {"profile": [], "income": [], "vehicle": []}
     for idx, role in enumerate(classified_roles):
+        slot_idx = items[idx]["slot_index"]
+        obj = slot_objects[slot_idx] if slot_idx < len(slot_objects) else None
+        if obj is not None and obj.extractor == "vehicle":
+            groups["vehicle"].append(idx)
+            continue
+        if obj is not None and obj.extractor not in ("profile", "income_statement"):
+            continue
         group = _role_group(role)
         if group in groups:
             groups[group].append(idx)
 
-    required_slots = [slot for slot in slots if slot.get("required", True)]
+    required_slots = [
+        slot for idx, slot in enumerate(slots)
+        if (idx not in direct_slots or slot_objects[idx].extractor == "vehicle") and slot.get("required", True)
+    ]
     required_roles = [
         (_normalized_image_slots([slot])[0].get("role"), slot) for slot in required_slots
     ]
@@ -548,8 +566,6 @@ async def _audit_camera_question(
             "ocr_data": {},
         }
 
-    slot_objects = [_slot_object(slot) for slot in slots]
-    slot_roles = [_normalized_image_slots([slot])[0].get("role") for slot in slots]
     config_by_object: Dict[str, Dict[str, Any]] = {}
     prompt_by_object: Dict[str, str] = {}
     for slot, obj in zip(slots, slot_objects):
@@ -559,17 +575,7 @@ async def _audit_camera_question(
             prompt_by_object.setdefault(obj.id, custom_prompt)
 
     income_object = next((obj for obj in slot_objects if obj.extractor == "income_statement"), None)
-    if income_object is None:
-        income_object = next(
-            (obj for role, obj in zip(slot_roles, slot_objects) if _role_group(role) == "income"),
-            None,
-        )
     profile_object = next((obj for obj in slot_objects if obj.extractor == "profile"), None)
-    if profile_object is None:
-        profile_object = next(
-            (obj for role, obj in zip(slot_roles, slot_objects) if _role_group(role) == "profile"),
-            None,
-        )
     income_config = config_by_object.get(income_object.id, {}) if income_object else {}
     profile_config = config_by_object.get(profile_object.id, {}) if profile_object else {}
     result["profile_object"] = profile_object
@@ -614,10 +620,43 @@ async def _audit_camera_question(
             )
             extraction_kinds.append("income")
             extraction_positions.append(local_idx)
+    custom_slots = {
+        idx for idx in direct_slots
+        if slot_objects[idx].extractor != "vehicle" and _requires_evidence(slot_objects[idx])
+    }
+    vehicle_slots = [idx for idx, obj in enumerate(slot_objects) if obj.extractor == "vehicle"]
+    direct_positions = {
+        local_idx: item["slot_index"] for local_idx, item in enumerate(items)
+        if item["slot_index"] in custom_slots
+    }
+    taken = set(direct_positions)
+    assigned = set(direct_positions.values())
+    for slot_idx in vehicle_slots:
+        if slot_idx in assigned:
+            continue
+        local_idx = next(
+            (i for i, item in enumerate(items) if i not in taken and item["slot_index"] == slot_idx), None
+        )
+        if local_idx is None:
+            local_idx = next((i for i in groups["vehicle"] if i not in taken), None)
+        if local_idx is None:
+            continue
+        direct_positions[local_idx] = slot_idx
+        taken.add(local_idx)
+        assigned.add(slot_idx)
+    for local_idx, slot_idx in direct_positions.items():
+        extraction_tasks.append(_extract_image_object(
+            vision_client, local_norm[local_idx], slot_objects[slot_idx],
+            _slot_config(slots[slot_idx]),
+            prompt_override=str(slots[slot_idx].get("ai_detection_prompt") or ""),
+        ))
+        extraction_kinds.append("object")
+        extraction_positions.append(local_idx)
 
     all_results = await asyncio.gather(*extraction_tasks, return_exceptions=True) if extraction_tasks else []
     profile_res: Any = {}
     income_pairs: List[Any] = []
+    direct_pairs = []
     for kind, local_idx, extracted in zip(extraction_kinds, extraction_positions, all_results):
         if isinstance(extracted, BaseException):
             raise extracted
@@ -625,6 +664,8 @@ async def _audit_camera_question(
             profile_res = extracted if isinstance(extracted, dict) else {}
             result["profile_res"] = profile_res
             result["profile_flat_index"] = items[local_idx]["flat_index"]
+        elif kind == "object":
+            direct_pairs.append((local_idx, extracted))
         else:
             income_pairs.append((local_idx, extracted))
 
@@ -640,9 +681,29 @@ async def _audit_camera_question(
     income_only = [pair for pair in income_pairs if _looks_like_income_statement(pair[1])]
     if income_only:
         income_pairs = income_only
-    result["income_required"] = sum(1 for role in slot_roles if _role_group(role) == "income")
+    result["income_required"] = sum(obj.extractor == "income_statement" for obj in slot_objects)
 
     image_results: List[Dict[str, Any]] = []
+    for local_idx, extracted in direct_pairs:
+        item = items[local_idx]
+        slot_idx = direct_positions[local_idx]
+        obj = slot_objects[slot_idx]
+        object_check = run_definition_checks(obj, extracted, _slot_config(slots[slot_idx]))
+        if _requires_evidence(obj) and not any(not _is_blank(v) for v in object_check["extraction"].values()):
+            reason = "Không trích xuất được thông tin từ ảnh để kiểm tra đối tượng yêu cầu."
+            object_check["passed"] = False
+            object_check["reasons"].append(reason)
+            object_check["failures"].append({"engine_id": "object_extraction", "reason": reason, "details": {}})
+        image_results.append(image_object_result(
+            obj.id, slot_idx, _slot_title(question, slot_idx), extracted, object_check,
+            question_id=question_id, flat_index=item["flat_index"],
+        ))
+        if result["violation"] is None and not object_check["passed"]:
+            result["violation"] = {
+                "failed_slot": item["flat_index"],
+                "reason": f"Câu hỏi '{question_id}' ảnh {slot_idx + 1}: {object_check['reasons'][0]}",
+                "ocr_data": extracted,
+            }
     if profile_object is not None and matched_profile_idx is not None:
         slot_idx = items[matched_profile_idx]["slot_index"]
         try:
@@ -693,15 +754,25 @@ async def _audit_camera_question(
                 "ocr_data": extracted,
             }
 
-    for local_idx in groups["vehicle"]:
-        slot_idx = items[local_idx]["slot_index"]
-        vehicle_object = slot_objects[local_idx] if local_idx < len(slot_objects) else None
-        if vehicle_object is not None:
-            image_results.append(image_object_result(
-                vehicle_object.id, slot_idx, _slot_title(question, slot_idx), {},
-                {"passed": True, "failures": [], "engines": []},
-                question_id=question_id, flat_index=items[local_idx]["flat_index"],
-            ))
+    audited = {entry["flat_index"] for entry in image_results}
+    missing_item = next((
+        item for item in items
+        if item["flat_index"] not in audited
+        and item["slot_index"] < len(slot_objects)
+        and _requires_evidence(slot_objects[item["slot_index"]])
+    ), None)
+    present_slots = {item["slot_index"] for item in items}
+    missing_slot = next((
+        idx for idx, slot in enumerate(slots)
+        if slot.get("required", True) and idx not in present_slots and _requires_evidence(slot_objects[idx])
+    ), None)
+    if result["violation"] is None and (missing_item is not None or missing_slot is not None):
+        slot_idx = missing_item["slot_index"] if missing_item is not None else missing_slot
+        result["violation"] = {
+            "failed_slot": missing_item["flat_index"] if missing_item is not None else (items[0]["flat_index"] if items else 0),
+            "reason": f"Câu hỏi '{question_id}' ảnh {slot_idx + 1}: Thiếu ảnh hoặc chưa kiểm tra được đối tượng yêu cầu.",
+            "ocr_data": {},
+        }
 
     result["income_pairs"] = [(items[idx]["flat_index"], facts) for idx, facts in income_pairs]
     result["image_object_results"] = image_results
