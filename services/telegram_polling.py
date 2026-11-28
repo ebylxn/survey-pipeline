@@ -45,6 +45,34 @@ BOT_INTERACTION_TTL = 600
 BOT_INTERACTIONS = BoundedTTLCache(max_size=2048, ttl_seconds=BOT_INTERACTION_TTL)
 ARGUMENT_PROMPT = "↩️ Trả lời tin nhắn này"
 HISTORY_COMMANDS = ("/surveys", "/my_surveys", "/tracuu", "/history")
+# A Telegram media group tops out at 10 photos; above this many the dossier
+# links the Drive images folder instead of uploading the set again.
+DOSSIER_PHOTO_LIMIT = 9
+
+
+async def submission_images_folder_url(db_pool, submission_id: Any) -> Optional[str]:
+    """Drive folder URL holding this submission's images, or None when Drive has none."""
+    sid = str(submission_id or "").strip()
+    if not db_pool or not sid:
+        return None
+    try:
+        async with db_pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT drive_id FROM drive_name_ledger "
+                    "WHERE entity_type='export' AND state='ACTIVE' AND object_name=%s "
+                    "AND mime_type='application/vnd.google-apps.folder' "
+                    "ORDER BY (parent_name='Images') DESC, last_seen_at DESC LIMIT 1",
+                    (sid,),
+                )
+                row = await cur.fetchone()
+    except Exception as exc:
+        logger.debug(f"Drive folder lookup failed for #{sid}: {exc}")
+        return None
+    drive_id = str((row[0] if row else "") or "").strip()
+    return f"https://drive.google.com/drive/folders/{drive_id}" if drive_id else None
+
+
 # Use the original delivery question, not the driver identity or current form settings.
 TARGET_ANSWER_SQL = "s.form_data -> (s.form_data -> '_delivery_policy' ->> 'question_id')"
 TARGET_PHONE_JOIN = f"""
@@ -294,15 +322,36 @@ class TelegramPollingRunner:
         txt_bytes: bytes,
         reply_markup: Optional[dict] = None,
     ) -> bool:
-        """Send photos first, then the dossier document carrying the review buttons."""
+        """Send photos first, then the dossier document carrying the review buttons.
+
+        Above `DOSSIER_PHOTO_LIMIT` photos the bundle links the submission's
+        Drive images folder instead of re-uploading the whole set to Telegram.
+        """
         await self.clear_previous_prompt(key, chat_id)
         if not self.bot_token or self.bot_token.lower() in ("mock_tg_token", "mock", "none", ""):
             logger.info(f"[MOCK TG DISPATCH] dossier bundle for {dossier.get('submission_id')}: {caption}")
             return True
 
+        sub_id = str(dossier.get("submission_id") or "submission")
+        photo_paths = list(dossier.get("photo_paths") or [])
+        if len(photo_paths) > DOSSIER_PHOTO_LIMIT:
+            images_url = await submission_images_folder_url(self.db_pool, sub_id)
+            if images_url:
+                caption = (
+                    f"{caption}\n\n🖼 <b>{len(photo_paths)} ảnh:</b> "
+                    f"<a href=\"{images_url}\">Mở thư mục ảnh trên Drive</a>"
+                )
+                photo_paths = []
+            else:
+                caption = (
+                    f"{caption}\n\n🖼 Chỉ gửi {DOSSIER_PHOTO_LIMIT}/{len(photo_paths)} ảnh "
+                    "do giới hạn Telegram; thư mục ảnh Drive chưa có (chạy Xuất Drive để tạo)."
+                )
+                photo_paths = photo_paths[:DOSSIER_PHOTO_LIMIT]
+
         files: Dict[str, Any] = {}
         media: List[dict] = []
-        for idx, path in enumerate((dossier.get("photo_paths") or [])[:9]):
+        for idx, path in enumerate(photo_paths):
             try:
                 with open(path, "rb") as fp:
                     raw_b = fp.read()
@@ -321,7 +370,6 @@ class TelegramPollingRunner:
             except Exception as e:
                 logger.warning(f"Failed reading dossier photo {path}: {e}")
 
-        sub_id = str(dossier.get("submission_id") or "submission")
         files["dossier_txt"] = (f"{sub_id}.txt", txt_bytes, "text/plain")
         if media:
             media[0]["caption"] = caption

@@ -1304,6 +1304,106 @@ async def test_dossier_bundle_sends_data_after_images(tmp_path, photo_count):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("photo_count,drive_url,expected", [
+    (9, "https://drive.google.com/drive/folders/FOLDER1", "photos"),
+    (10, "https://drive.google.com/drive/folders/FOLDER1", "link"),
+    (10, None, "truncated"),
+])
+async def test_dossier_bundle_links_drive_above_photo_limit(tmp_path, photo_count, drive_url, expected):
+    """Over 9 photos the dossier links the Drive images folder instead of uploading them."""
+    import json
+    from PIL import Image
+    from services import telegram_polling
+    from services.telegram_polling import TelegramPollingRunner
+
+    calls = []
+
+    class Resp:
+        status_code = 200
+        text = ""
+        def __init__(self, payload): self._p = payload
+        def json(self): return {"result": self._p}
+
+    class Client:
+        async def post(self, url, data=None, files=None, json=None, timeout=None):
+            calls.append((url.rsplit("/", 1)[-1], data or {}, files or {}))
+            if url.endswith("sendMediaGroup"):
+                return Resp([{"message_id": 1}, {"message_id": 2}])
+            return Resp({"message_id": 7})
+
+    async def fake_url(_pool, _sid):
+        return drive_url
+
+    paths = []
+    for index in range(photo_count):
+        path = os.path.join(str(tmp_path), f"slot_{index}.jpg")
+        Image.new("RGB", (40, 40), (index * 20, 90, 140)).save(path)
+        paths.append(path)
+
+    runner = TelegramPollingRunner(bot_token="123:abc")
+    async def get_client(): return Client()
+    runner.get_client = get_client
+    with patch.object(telegram_polling, "submission_images_folder_url", fake_url):
+        ok = await runner.send_dossier_bundle(
+            1, "k", {"submission_id": "VN-CAP", "photo_paths": paths}, "cap", b"{}",
+            {"inline_keyboard": [[{"text": "Duyệt", "callback_data": "admin_req_approve:VN-CAP"}]]},
+        )
+
+    assert ok
+    methods = [call[0] for call in calls]
+    document = next(call for call in calls if call[0] == "sendDocument")
+    assert "admin_req_approve" in document[1]["reply_markup"]
+    group = next((call for call in calls if call[0] == "sendMediaGroup"), None)
+    group_caption = json.loads(group[1]["media"])[0].get("caption") if group else ""
+
+    if expected == "link":
+        assert methods == ["sendDocument"]
+        assert "https://drive.google.com/drive/folders/FOLDER1" in document[1]["caption"]
+        assert "10 ảnh" in document[1]["caption"]
+    elif expected == "truncated":
+        assert methods == ["sendMediaGroup", "sendDocument"]
+        assert len(json.loads(group[1]["media"])) == 9
+        assert "9/10" in group_caption
+    else:
+        assert methods == ["sendMediaGroup", "sendDocument"]
+        assert len(json.loads(group[1]["media"])) == 9
+        assert group_caption == "cap"
+
+
+@pytest.mark.asyncio
+async def test_submission_images_folder_url_prefers_the_images_tree():
+    """The ledger lookup returns the Images/<submission> folder, else nothing."""
+    from services.telegram_polling import submission_images_folder_url
+
+    queries = []
+
+    class Cursor:
+        def __init__(self, row): self._row = row
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return False
+        async def execute(self, sql, params=()): queries.append((sql, params))
+        async def fetchone(self): return self._row
+
+    class Conn:
+        def __init__(self, row): self._row = row
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return False
+        def cursor(self): return Cursor(self._row)
+
+    class Pool:
+        def __init__(self, row): self._row = row
+        def connection(self): return Conn(self._row)
+
+    url = await submission_images_folder_url(Pool(("FOLDER1",)), "vn-1")
+    assert url == "https://drive.google.com/drive/folders/FOLDER1"
+    assert "'Images'" in queries[0][0] and queries[0][1] == ("vn-1",)
+
+    assert await submission_images_folder_url(Pool(None), "VN-1") is None
+    assert await submission_images_folder_url(None, "VN-1") is None
+    assert await submission_images_folder_url(Pool(("F",)), "") is None
+
+
+@pytest.mark.asyncio
 async def test_decision_recipient_follows_tg_response_source():
     """Form setting chooses the Telegram verdict recipient: none, CTV, or a question's answer."""
     from unittest.mock import patch
