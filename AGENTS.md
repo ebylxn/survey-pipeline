@@ -1,5 +1,18 @@
 # Agent rules
 
+## Release policy (standing user instruction, 2026-11-28)
+
+Every accepted change ships to production immediately: commit, push `master`, then deploy staging and production with `scripts/deploy_prod.sh`. Do not wait for a per-release confirmation.
+
+Required steps:
+
+1. Take a `pg_dump` of the target database and copy the target `.env` into `/root/backups/` before mutating anything.
+2. Set the new `APP_BUILD_ID` in the target `.env`, recreate the app and worker with `docker compose up -d`, then publish the code with the guarded release.
+3. Verify `/health`, `/ready`, the worker heartbeat/build id, and run the changed logic in-container against the live configuration.
+4. Record the build, release ids, backups and verification in `docs/DEPLOY_TOOLING.md`, and update `~/personal-docs/README.md` (`## todo`) with the same facts.
+
+`data/image_objects/*.json` and `data/check_engines/*.json` only seed a database once; after a code deploy, upsert changed object/engine definitions into `admin_module_registry` with a `system_audit_log` row, because the enabled database catalog overrides the files at runtime.
+
 ## UI language split
 
 The admin and public UI default to Vietnamese (`vi`). Any surface that exposes the VI/EN toggle must translate all of its visible strings; never leave an English-only label or mix languages inside one sentence. Standalone admin pages without the toggle must still be Vietnamese-only, not Vietnamese chrome around English labels.
