@@ -606,7 +606,7 @@ def _evaluate_constraint(constraint: Dict[str, Any], facts: Dict[str, Any]) -> T
         passed = _matches_any(actual, raw_value)
     elif op == "between":
         values = _numeric_values(actual)
-        passed = bool(values) and all(low <= value <= high for value in values)
+        passed = bool(values) and any(low <= value <= high for value in values)
     else:
         values = _numeric_values(actual)
         right = _to_number(raw_value)
@@ -614,9 +614,9 @@ def _evaluate_constraint(constraint: Dict[str, Any], facts: Dict[str, Any]) -> T
             passed = False
         else:
             passed = (
-                all(value >= right for value in values)
+                any(value >= right for value in values)
                 if op == "gte"
-                else all(value <= right for value in values)
+                else any(value <= right for value in values)
             )
 
     if passed:

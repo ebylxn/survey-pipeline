@@ -546,16 +546,18 @@ def test_constraints_engine_accepts_comma_separated_months():
 
 
 def test_constraints_engine_between_uses_two_bounds_on_list_facts():
+    """A week that crosses the month boundary still belongs to the campaign month."""
     base = {"gross_revenue": 5_000_000, "net_income": 4_000_000, "discount_and_tax": 1_000_000, "detected_app": "XANH_SM", "is_legible": True, "confidence_score": 0.95}
     september = {**base, "period": "01/09/2026 - 07/09/2026"}
     october = {**base, "period": "01/10/2026 - 07/10/2026"}
     november = {**base, "period": "01/11/2026 - 07/11/2026"}
     cross_month = {**base, "period": "28/09/2026 - 04/10/2026"}
+    august_boundary = {**base, "period": "31/08/2026 - 06/09/2026"}
 
     bounds = [{"field": "period_months", "op": "between", "value_min": 9, "value_max": 10}]
-    for extraction in (september, october, cross_month):
+    for extraction in (september, october, cross_month, august_boundary):
         result = run_object_checks("weekly_income", extraction, _weekly_config(constraints=bounds))
-        assert result["passed"] is True, result["reasons"]
+        assert result["passed"] is True, (extraction["period"], result["reasons"])
 
     outside = run_object_checks("weekly_income", november, _weekly_config(constraints=bounds))
     assert outside["passed"] is False
@@ -567,11 +569,16 @@ def test_constraints_engine_between_uses_two_bounds_on_list_facts():
     ]))
     assert legacy["passed"] is True, legacy["reasons"]
 
-    # A list fact must satisfy the bound at every element.
-    spanning = run_object_checks("weekly_income", cross_month, _weekly_config(constraints=[
+    # Overlap means one matching month is enough; a fully outside window still fails.
+    overlapping = run_object_checks("weekly_income", cross_month, _weekly_config(constraints=[
         {"field": "period_months", "op": "between", "value_min": 10, "value_max": 11},
     ]))
-    assert spanning["passed"] is False
+    assert overlapping["passed"] is True, overlapping["reasons"]
+
+    disjoint = run_object_checks("weekly_income", cross_month, _weekly_config(constraints=[
+        {"field": "period_months", "op": "between", "value_min": 11, "value_max": 12},
+    ]))
+    assert disjoint["passed"] is False
 
     missing_bound = run_object_checks("weekly_income", september, _weekly_config(constraints=[
         {"field": "period_months", "op": "between", "value_min": 9},
