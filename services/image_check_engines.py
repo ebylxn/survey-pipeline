@@ -552,6 +552,27 @@ def _matches_any(actual: Any, raw_value: Any) -> bool:
     return any(_compare_scalar(actual, part) for part in parts)
 
 
+def _numeric_values(actual: Any) -> Optional[List[float]]:
+    """Every numeric fact value, so list fields (months, years) compare per item."""
+    items = actual if isinstance(actual, (list, tuple, set)) else [actual]
+    values = [_to_number(item) for item in items]
+    if not values or any(value is None for value in values):
+        return None
+    return values
+
+
+def _range_bounds(constraint: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+    """`between` bounds from explicit min/max keys, or the legacy 'a,b' value."""
+    low_raw = constraint.get("value_min", constraint.get("min_value"))
+    high_raw = constraint.get("value_max", constraint.get("max_value"))
+    if not _is_empty(low_raw) or not _is_empty(high_raw):
+        return _to_number(low_raw), _to_number(high_raw)
+    parts = _split_values(constraint.get("value"))
+    if len(parts) != 2:
+        return None, None
+    return _to_number(parts[0]), _to_number(parts[1])
+
+
 def _evaluate_constraint(constraint: Dict[str, Any], facts: Dict[str, Any]) -> Tuple[bool, str]:
     if not isinstance(constraint, dict):
         return False, "Ràng buộc không hợp lệ: mục ràng buộc phải là object."
@@ -562,11 +583,14 @@ def _evaluate_constraint(constraint: Dict[str, Any], facts: Dict[str, Any]) -> T
         return False, f"Ràng buộc không hợp lệ: trường '{field}' không được hỗ trợ."
     if op not in _CONSTRAINT_OPS:
         return False, f"Ràng buộc không hợp lệ: phép '{op}' không được hỗ trợ."
-    if _is_empty(raw_value):
+    low, high = _range_bounds(constraint) if op == "between" else (None, None)
+    if op == "between" and (low is None or high is None):
+        return False, f"Ràng buộc không hợp lệ: {field} between cần giá trị nhỏ nhất và lớn nhất."
+    if op != "between" and _is_empty(raw_value):
         return False, f"Ràng buộc không hợp lệ: {field} {op} thiếu giá trị."
 
     actual = _constraint_actual(facts, field)
-    label = f"{field} {op} {raw_value}"
+    label = f"{field} between {low:g}-{high:g}" if op == "between" else f"{field} {op} {raw_value}"
 
     if op == "equals":
         passed = _matches_any(actual, raw_value)
@@ -579,24 +603,21 @@ def _evaluate_constraint(constraint: Dict[str, Any], facts: Dict[str, Any]) -> T
             text = str(actual or "").lower()
             passed = any(str(part).strip().lower() in text for part in _expected_parts(raw_value))
     elif op == "in":
-        passed = any(_compare_scalar(actual, option) for option in _split_values(raw_value))
+        passed = _matches_any(actual, raw_value)
+    elif op == "between":
+        values = _numeric_values(actual)
+        passed = bool(values) and all(low <= value <= high for value in values)
     else:
-        left = _to_number(actual)
-        if op == "between":
-            parts = _split_values(raw_value)
-            if len(parts) != 2:
-                return False, f"Ràng buộc không hợp lệ: {field} between cần giá trị 'a,b'."
-            low, high = _to_number(parts[0]), _to_number(parts[1])
-            if left is None or low is None or high is None:
-                passed = False
-            else:
-                passed = low <= left <= high
+        values = _numeric_values(actual)
+        right = _to_number(raw_value)
+        if not values or right is None:
+            passed = False
         else:
-            right = _to_number(raw_value)
-            if left is None or right is None:
-                passed = False
-            else:
-                passed = left >= right if op == "gte" else left <= right
+            passed = (
+                all(value >= right for value in values)
+                if op == "gte"
+                else all(value <= right for value in values)
+            )
 
     if passed:
         return True, ""

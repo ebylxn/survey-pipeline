@@ -1224,8 +1224,15 @@
             return [
                 { key: 'field', label: 'Trường', type: 'select', options: [] },
                 { key: 'op', label: 'Điều kiện', type: 'select', options: [] },
-                { key: 'value', label: 'Giá trị', type: 'text' }
+                { key: 'value', label: 'Giá trị', type: 'text' },
+                { key: 'value_min', label: 'Từ (nhỏ nhất)', type: 'text' },
+                { key: 'value_max', label: 'Đến (lớn nhất)', type: 'text' }
             ];
+        }
+        function constraintFieldVisible(fieldKey, op) {
+            if (fieldKey === 'value') return op !== 'between';
+            if (fieldKey === 'value_min' || fieldKey === 'value_max') return op === 'between';
+            return true;
         }
         function slotObjectCustomizableItem(slot, key) {
             const obj = imageObjectById(slot && slot.object_type);
@@ -1263,7 +1270,6 @@
         function constraintValuePlaceholder(op, fieldKey) {
             if (fieldKey !== 'value') return '';
             if (op === 'in') return '9, 10';
-            if (op === 'between') return '2026-09, 2026-10';
             return '';
         }
         function renderSlotObjectConstraintField(qidx, sidx, key, ridx, row, fieldDef, op) {
@@ -1292,7 +1298,10 @@
         }
         function renderSlotObjectConstraintRow(qidx, sidx, key, ridx, row, fields) {
             const op = row && Object.prototype.hasOwnProperty.call(row, 'op') ? row.op : '';
-            const controls = fields.map(fieldDef => renderSlotObjectConstraintField(qidx, sidx, key, ridx, row, fieldDef, op)).join('');
+            const controls = fields
+                .filter(fieldDef => constraintFieldVisible(String(fieldDef && fieldDef.key || ''), op))
+                .map(fieldDef => renderSlotObjectConstraintField(qidx, sidx, key, ridx, row, fieldDef, op))
+                .join('');
             const keyArg = escapeHtml(JSON.stringify(key));
             const rejectMsg = row && row.reject_message != null ? String(row.reject_message) : '';
             const boxStyle = 'width:100%; padding:6px; font-size:0.8rem; background:#020617; border:1px solid #334155; color:#fff; border-radius:4px;';

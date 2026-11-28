@@ -545,6 +545,56 @@ def test_constraints_engine_accepts_comma_separated_months():
     assert october_against_september["passed"] is False
 
 
+def test_constraints_engine_between_uses_two_bounds_on_list_facts():
+    base = {"gross_revenue": 5_000_000, "net_income": 4_000_000, "discount_and_tax": 1_000_000, "detected_app": "XANH_SM", "is_legible": True, "confidence_score": 0.95}
+    september = {**base, "period": "01/09/2026 - 07/09/2026"}
+    october = {**base, "period": "01/10/2026 - 07/10/2026"}
+    november = {**base, "period": "01/11/2026 - 07/11/2026"}
+    cross_month = {**base, "period": "28/09/2026 - 04/10/2026"}
+
+    bounds = [{"field": "period_months", "op": "between", "value_min": 9, "value_max": 10}]
+    for extraction in (september, october, cross_month):
+        result = run_object_checks("weekly_income", extraction, _weekly_config(constraints=bounds))
+        assert result["passed"] is True, result["reasons"]
+
+    outside = run_object_checks("weekly_income", november, _weekly_config(constraints=bounds))
+    assert outside["passed"] is False
+    assert "between 9-10" in outside["reasons"][0]
+
+    # Legacy comma form of the same constraint keeps working.
+    legacy = run_object_checks("weekly_income", september, _weekly_config(constraints=[
+        {"field": "period_months", "op": "between", "value": "9,10"},
+    ]))
+    assert legacy["passed"] is True, legacy["reasons"]
+
+    # A list fact must satisfy the bound at every element.
+    spanning = run_object_checks("weekly_income", cross_month, _weekly_config(constraints=[
+        {"field": "period_months", "op": "between", "value_min": 10, "value_max": 11},
+    ]))
+    assert spanning["passed"] is False
+
+    missing_bound = run_object_checks("weekly_income", september, _weekly_config(constraints=[
+        {"field": "period_months", "op": "between", "value_min": 9},
+    ]))
+    assert missing_bound["passed"] is False
+    assert "nhỏ nhất và lớn nhất" in missing_bound["reasons"][0]
+
+
+def test_constraints_engine_numeric_ops_accept_list_facts():
+    base = {"gross_revenue": 5_000_000, "net_income": 4_000_000, "discount_and_tax": 1_000_000, "detected_app": "XANH_SM", "is_legible": True, "confidence_score": 0.95}
+    october = {**base, "period": "01/10/2026 - 07/10/2026"}
+
+    assert run_object_checks("weekly_income", october, _weekly_config(constraints=[
+        {"field": "period_months", "op": "gte", "value": 10},
+    ]))["passed"] is True
+    assert run_object_checks("weekly_income", october, _weekly_config(constraints=[
+        {"field": "period_months", "op": "lte", "value": 9},
+    ]))["passed"] is False
+    assert run_object_checks("weekly_income", october, _weekly_config(constraints=[
+        {"field": "period_months", "op": "in", "value": "9,10"},
+    ]))["passed"] is True
+
+
 def test_constraints_engine_rejects_empty_value_and_unknown_field():
     base = {"gross_revenue": 5_000_000, "net_income": 4_000_000, "discount_and_tax": 1_000_000, "period": "28/09 - 04/10"}
     empty = run_object_checks("weekly_income", base, _weekly_config(constraints=[

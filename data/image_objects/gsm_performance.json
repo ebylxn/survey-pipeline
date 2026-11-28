@@ -40,8 +40,10 @@
       "help": "Mặc định tháng 11/2026 theo ảnh mẫu. Sửa cả tháng và năm cho chiến dịch. Các ràng buộc kết hợp AND; kỳ nhiều ngày được phép giao với tháng mục tiêu. Không bắt buộc tab Tháng.",
       "item_fields": [
         {"key": "field", "label": "Trường", "type": "select", "options": ["period_months", "period_years"]},
-        {"key": "op", "label": "Điều kiện", "type": "select", "options": ["contains"]},
-        {"key": "value", "label": "Tháng (1–12) / năm", "type": "text"}
+        {"key": "op", "label": "Điều kiện", "type": "select", "options": ["contains", "between"]},
+        {"key": "value", "label": "Tháng/năm (nhiều giá trị: 9,10)", "type": "text"},
+        {"key": "value_min", "label": "Từ (nhỏ nhất)", "type": "text"},
+        {"key": "value_max", "label": "Đến (lớn nhất)", "type": "text"}
       ]
     },
     {

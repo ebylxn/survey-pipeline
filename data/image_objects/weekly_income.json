@@ -137,7 +137,9 @@
       "item_fields": [
         {"key": "field", "label": "Trường", "type": "select", "options": ["period_type", "period_months", "period_years", "duration_days", "period_start", "period_end"]},
         {"key": "op", "label": "Điều kiện", "type": "select", "options": ["equals", "not_equals", "contains", "in", "gte", "lte", "between"]},
-        {"key": "value", "label": "Giá trị", "type": "text"}
+        {"key": "value", "label": "Giá trị", "type": "text"},
+        {"key": "value_min", "label": "Từ (nhỏ nhất)", "type": "text"},
+        {"key": "value_max", "label": "Đến (lớn nhất)", "type": "text"}
       ]
     }
   ],
