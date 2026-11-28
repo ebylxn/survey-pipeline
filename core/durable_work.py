@@ -10,7 +10,7 @@ from uuid import uuid4
 from psycopg.rows import dict_row
 
 from config import settings
-from services.telegram_ui import with_survey_copy
+from services.telegram_ui import submission_form_line, with_survey_copy
 from core.phone_links import (
     CONFLICTED_PHONE_LINK_SOURCE,
     VERIFIED_PHONE_LINK_SOURCES,
@@ -205,6 +205,8 @@ async def enqueue_submission_work(conn, submission_id, transition="SUBMITTED", *
     sid, status = row["submission_id"], row["status"]
     safe_sid, safe_status = html.escape(sid), html.escape(status)
     reason = html.escape(str(row.get("rejection_reason") or "Hợp lệ"))
+    form_line = submission_form_line(row.get("form_id"))
+    form_suffix = f"\n{form_line}" if form_line else ""
     ids = []
 
     async def add(target, payload):
@@ -219,12 +221,12 @@ async def enqueue_submission_work(conn, submission_id, transition="SUBMITTED", *
     if transition != "PARTY_ONLY":
         await add("TELEGRAM_NOTIFY", {"bot_role": admin_role, "chat_id": settings.TELEGRAM_ADMIN_GROUP_ID,
             "message_class": "ADMIN_REVIEW" if transition in {"SUBMITTED", "LEGACY_RECONCILED"} else transition + "_ADMIN",
-            "parse_mode": "HTML", "text": context.get("admin_text") or f"Phiếu khảo sát #{safe_sid}: <b>{safe_status}</b>\n{reason}",
+            "parse_mode": "HTML", "text": context.get("admin_text") or f"Phiếu khảo sát #{safe_sid}: <b>{safe_status}</b>{form_suffix}\n{reason}",
             "reply_markup": with_survey_copy(context.get("admin_markup") or default_admin_markup, sid)})
     recipient, skip = await _recipient(conn, row, policy)
     driver_role = "driver" if settings.TELEGRAM_DRIVER_BOT_TOKEN else "primary"
     party = {"bot_role": driver_role, "chat_id": recipient, "message_class": "PARTY_VERDICT" if transition in {"SUBMITTED", "LEGACY_RECONCILED"} else transition + "_PARTY",
-             "parse_mode": "HTML", "text": context.get("party_text") or f"Cập Nhật Khảo Sát #{safe_sid}\nTrạng thái: <b>{safe_status}</b>\n{reason}"}
+             "parse_mode": "HTML", "text": context.get("party_text") or f"Cập Nhật Khảo Sát #{safe_sid}\nTrạng thái: <b>{safe_status}</b>{form_suffix}\n{reason}"}
     if skip:
         party["policy"] = {"enabled": False, "version": policy["version"], "skip_reason": skip}
     elif settings.TELEGRAM_ADMIN_BOT_TOKEN and driver_role != "admin":

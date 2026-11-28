@@ -2,9 +2,38 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 COPY_SURVEY_ID_LABEL = "Sao chép mã phiếu"
+
+
+def form_label(form_id: Any) -> str:
+    """Human-readable form name for a submission message, or "" without an id."""
+    fid = str(form_id or "").strip()
+    if not fid:
+        return ""
+    title = ""
+    try:
+        from core.state import FORM_REGISTRY
+
+        schema = FORM_REGISTRY.get(fid)
+        if schema is not None:
+            title = str(getattr(schema, "title", "") or "").strip()
+            if not title and isinstance(schema, dict):
+                title = str(schema.get("title") or "").strip()
+    except Exception:  # registry unavailable must never break a notification
+        title = ""
+    safe_id = html.escape(fid, quote=False)
+    if title and title != fid:
+        return f"<b>{html.escape(title, quote=False)}</b> (<code>{safe_id}</code>)"
+    return f"<code>{safe_id}</code>"
+
+
+def submission_form_line(form_id: Any) -> str:
+    """Bullet line naming the survey form, or "" when the form is unknown."""
+    label = form_label(form_id)
+    return f"• <b>Biểu mẫu:</b> {label}" if label else ""
 
 
 def survey_copy_button(submission_id: Any) -> dict[str, Any]:

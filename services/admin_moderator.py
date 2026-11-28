@@ -10,7 +10,7 @@ import httpx
 from typing import Optional, List, Dict, Any, Union
 from config import settings
 from services.image_object_projection import project_income_weeks
-from services.telegram_ui import with_survey_copy
+from services.telegram_ui import submission_form_line, with_survey_copy
 logger = logging.getLogger("admin_moderator")
 
 
@@ -375,8 +375,10 @@ def render_dossier_message(dossier: dict) -> str:
     c_model = dossier.get("car_model", "")
     veh_str = f"{v_type} ({c_model})" if c_model else v_type
 
+    form_line = submission_form_line(dossier.get("form_id"))
     lines = [
         f"📋 <b>HỒ SƠ KHẢO SÁT #{sub_id}</b>\n",
+        *([form_line] if form_line else []),
         f"• <b>Trạng thái:</b> {status_icon} <code>{status}</code>",
         f"• <b>Thời gian:</b> <code>{dossier.get('created_at', 'Vừa xong')}</code>",
         (

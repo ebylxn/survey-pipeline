@@ -45,7 +45,7 @@ from core.repositories import append_dev_submission
 from services.privacy_crypto import hash_phone
 from services.normalizer import sanitize_and_normalize_image, compute_laplacian_blur_score, detect_image_manipulation
 from services.action_checklist import dispatch_action_checklist
-from services.telegram_ui import with_survey_copy
+from services.telegram_ui import submission_form_line, with_survey_copy
 from services.dynamic_form_html import render_dynamic_form_html, render_ctv_selector_landing_html
 from services.form_engine import get_effective_image_checks
 
@@ -1454,9 +1454,11 @@ async def dispatch_submission_telegram_notifications(
     status_emoji = "✅" if status_str == "APPROVED" else ("⚠️" if status_str == "MANUAL_REVIEW" else "❌")
     clean_phone = driver_phone or "N/A"
     masked_phone = clean_phone[:3] + "****" + clean_phone[-3:] if len(clean_phone) >= 7 else clean_phone
+    form_line = submission_form_line(form_id)
     collab_msg = (
         f"📋 <b>Cập Nhật Khảo Sát #{html.escape(str(submission_id))}</b>\n\n"
-        f"• <b>Đối tác / Khách hàng:</b> {html.escape(str(driver_name or 'Tài xế'))} (<code>{html.escape(str(masked_phone))}</code>)\n"
+        + (f"{form_line}\n" if form_line else "")
+        + f"• <b>Đối tác / Khách hàng:</b> {html.escape(str(driver_name or 'Tài xế'))} (<code>{html.escape(str(masked_phone))}</code>)\n"
         f"• <b>Trạng thái:</b> {status_emoji} <b>{html.escape(str(status_str))}</b>\n"
         f"• <b>Ghi chú:</b> {html.escape(str(reason_str or 'Hợp lệ'))}"
     )

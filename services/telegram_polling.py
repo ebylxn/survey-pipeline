@@ -26,7 +26,7 @@ from services.admin_moderator import (
     render_dossier_message,
 )
 from services.normalizer import compute_laplacian_blur_score, normalize_image_to_webp
-from services.telegram_ui import with_survey_copy
+from services.telegram_ui import submission_form_line, with_survey_copy
 from services.vehicle_tracker import VehiclePersistenceTracker, stored_vehicle_candidate
 
 logger = logging.getLogger("telegram_polling")
@@ -547,9 +547,11 @@ class TelegramPollingRunner:
 
         cur_status = dossier.get("status", "PENDING")
         ctv = dossier.get("ctv_code") or dossier.get("collaborator_id") or "N/A"
+        form_line = submission_form_line(dossier.get("form_id"))
         caption = (
             f"📋 <b>HỒ SƠ KHẢO SÁT #{html.escape(str(clean_sub_id))}</b>\n"
-            f"• <b>CTV:</b> <code>{html.escape(str(ctv))}</code>"
+            + (f"{form_line}\n" if form_line else "")
+            + f"• <b>CTV:</b> <code>{html.escape(str(ctv))}</code>"
         )
         # Raw nested facts duplicate the rest of the dossier; keep the txt focused.
         raw_data = {k: v for k, v in dossier.items() if k not in ("photo_paths", "raw_data")}
@@ -2212,6 +2214,54 @@ class DriverBotRunner(TelegramPollingRunner):
                 logger.debug(f"Dev submission status lookup failed in {fpath}: {e}")
         return None
 
+    async def _get_submission_form(self, sub_id: str, *, requester_telegram_id: Optional[int] = None) -> Optional[str]:
+        """Form id for a submission, honoring the same ownership rule as its status."""
+        canonical = normalize_submission_id(sub_id)
+        if not canonical:
+            return None
+        if self.db_pool:
+            try:
+                async with self.db_pool.connection() as conn:
+                    async with conn.cursor(row_factory=tuple_row) as cur:
+                        if requester_telegram_id is None:
+                            await cur.execute(
+                                "SELECT form_id FROM survey_submissions WHERE UPPER(submission_id)=UPPER(%s) LIMIT 1",
+                                (canonical,),
+                            )
+                        else:
+                            await cur.execute(
+                                f"SELECT s.form_id FROM survey_submissions s JOIN phone_telegram_links link "
+                                f"ON link.phone_normalized={phone_normalization_sql('s.driver_phone')} "
+                                "WHERE UPPER(s.submission_id)=UPPER(%s) AND link.telegram_user_id=%s "
+                                "AND link.telegram_user_id>0 AND link.source IN (%s,%s) AND link.updated_at<=s.created_at",
+                                (canonical, requester_telegram_id, *VERIFIED_PHONE_LINK_SOURCES),
+                            )
+                        row = await cur.fetchone()
+                        if row:
+                            return str(row[0] or "").strip() or None
+            except Exception as e:
+                logger.debug(f"Submission form lookup failed for #{canonical}: {e}")
+        if requester_telegram_id is not None:
+            return None
+        for fpath in (
+            os.path.join(os.getcwd(), "data", "dev_test_submissions.json"),
+            DEV_STORAGE_FILE,
+        ):
+            if not os.path.exists(fpath):
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    records = json.load(f)
+                for r in records if isinstance(records, list) else []:
+                    if normalize_submission_id(r.get("submission_id")) != canonical:
+                        continue
+                    if not (r.get("status") or r.get("reason") or r.get("rejection_reason") or r.get("submitted_at")):
+                        continue
+                    return str(r.get("form_id") or "").strip() or None
+            except Exception as e:
+                logger.debug(f"Dev submission form lookup failed in {fpath}: {e}")
+        return None
+
     async def _prune_stale_active_appeals(self) -> None:
         """Drop in-memory appeals whose submission is no longer APPEAL_PENDING."""
         for uid, sid in list(self.active_appeals.items()):
@@ -2246,11 +2296,17 @@ class DriverBotRunner(TelegramPollingRunner):
             )
             return
 
+        appeal_form_line = submission_form_line(
+            await self._get_submission_form(canonical, requester_telegram_id=user_id)
+        )
+        appeal_form_suffix = f"\n\n{appeal_form_line}" if appeal_form_line else ""
+
         if status == "APPROVED":
             await self.send_message(
                 chat_id,
                 f"✅ <b>Phiếu #{canonical} đã được DUYỆT.</b>\n\n"
-                "Phiếu đã hoàn tất nên không thể gửi phúc khảo.",
+                "Phiếu đã hoàn tất nên không thể gửi phúc khảo."
+                f"{appeal_form_suffix}",
                 reply_markup=self.get_driver_reply_keyboard(),
             )
             return
@@ -2260,7 +2316,8 @@ class DriverBotRunner(TelegramPollingRunner):
                 chat_id,
                 f"⚠️ <b>Phiếu #{canonical} đã có một yêu cầu kiểm tra/phúc khảo đang hoạt động!</b>\n\n"
                 f"Bạn không thể gửi thêm yêu cầu mới khi yêu cầu cũ chưa hoàn tất.\n"
-                f"👉 Gõ <code>/cancel {canonical}</code> nếu bạn muốn hủy yêu cầu này.",
+                f"👉 Gõ <code>/cancel {canonical}</code> nếu bạn muốn hủy yêu cầu này."
+                f"{appeal_form_suffix}",
                 reply_markup=self.get_driver_reply_keyboard(),
             )
             return
@@ -2269,7 +2326,8 @@ class DriverBotRunner(TelegramPollingRunner):
             await self.send_message(
                 chat_id,
                 f"⏳ <b>Phiếu #{canonical} đang được Ban Quản Trị kiểm tra.</b>\n\n"
-                "Vui lòng chờ kết quả; nếu phiếu bị từ chối, bạn có thể gửi phúc khảo ngay sau đó.",
+                "Vui lòng chờ kết quả; nếu phiếu bị từ chối, bạn có thể gửi phúc khảo ngay sau đó."
+                f"{appeal_form_suffix}",
                 reply_markup=self.get_driver_reply_keyboard(),
             )
             return
@@ -2277,7 +2335,8 @@ class DriverBotRunner(TelegramPollingRunner):
         if status != "REJECTED":
             await self.send_message(
                 chat_id,
-                f"⚠️ <b>Phiếu #{canonical} chưa thể phúc khảo ở trạng thái hiện tại ({status}).</b>",
+                f"⚠️ <b>Phiếu #{canonical} chưa thể phúc khảo ở trạng thái hiện tại ({status}).</b>"
+                f"{appeal_form_suffix}",
                 reply_markup=self.get_driver_reply_keyboard(),
             )
             return
@@ -2623,10 +2682,14 @@ class DriverBotRunner(TelegramPollingRunner):
                     await self.send_message(chat_id, "Bạn chỉ có thể bổ sung ảnh của mình trong cuộc trò chuyện riêng đã xác thực.")
                     return
                 self.pending_fixes[chat_id] = {"sub_id": sub_id, "slot": slot_name, "timestamp": time.time()}
+                fix_form_line = submission_form_line(
+                    await self._get_submission_form(sub_id, requester_telegram_id=user_id)
+                )
                 await self.send_message(
                     chat_id,
                     f"📸 <b>Bổ Sung Ảnh Cho Phiếu #{sub_id}:</b>\n\n"
-                    f"Ảnh mục <b>{html.escape(slot_name)}</b> trước đó chưa đạt tiêu chuẩn độ nét.\n"
+                    + (f"{fix_form_line}\n" if fix_form_line else "")
+                    + f"Ảnh mục <b>{html.escape(slot_name)}</b> trước đó chưa đạt tiêu chuẩn độ nét.\n"
                     f"👉 <i>Vui lòng chụp lại rõ nét và gửi thẳng ảnh vào khung chat này ngay bây giờ!</i>",
                     reply_markup=self.get_driver_reply_keyboard(),
                 )
