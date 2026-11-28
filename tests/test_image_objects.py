@@ -800,6 +800,7 @@ def _probe_form(form_id: str, slots):
         settings=FormSettings(
             decree13_required=False,
             is_test_mode=True,
+            require_manual_review=False,
             image_checks=ImageCheckConfig(enable_blur_check=False, enable_ai_vision=True, enable_anti_fraud=False),
         ),
         questions=[FormQuestion(
@@ -895,6 +896,7 @@ def _probe_multi_camera_form(form_id: str):
         settings=FormSettings(
             decree13_required=False,
             is_test_mode=True,
+            require_manual_review=False,
             image_checks=ImageCheckConfig(enable_blur_check=False, enable_ai_vision=True, enable_anti_fraud=False),
         ),
         questions=[
