@@ -490,7 +490,8 @@ def test_multi_image_order_agnostic_matching_success(monkeypatch):
     )
     assert resp.status_code == 200
     res_json = resp.json()
-    assert res_json["status"] == "APPROVED"
+    # The live Nov form requires manual review; test mode no longer auto-approves it.
+    assert res_json["status"] == "MANUAL_REVIEW"
 def test_multi_image_order_enforcement_correct_approved(monkeypatch):
     monkeypatch.setenv("MOCK_AI", "1")
     import io
@@ -545,7 +546,8 @@ def test_multi_image_order_enforcement_correct_approved(monkeypatch):
     )
     assert resp.status_code == 200
     res_json = resp.json()
-    assert res_json["status"] == "APPROVED"
+    # The live Nov form requires manual review; test mode no longer auto-approves it.
+    assert res_json["status"] == "MANUAL_REVIEW"
 
 
 def test_dynamic_form_qr_code_and_camera_tooltip_and_floating_buttons():

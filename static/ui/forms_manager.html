@@ -321,17 +321,28 @@
             flex-direction: column;
             align-items: flex-start;
             gap: 4px;
-            min-width: 110px;
+            flex: 0 0 170px;
+            min-width: 0;
+        }
+
+        /* Fixed-width first column keeps every row's title/meta/actions aligned. */
+        .form-grid.row-mode .form-card-top > span {
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .form-grid.row-mode .form-item-card h3 {
             min-height: auto;
             -webkit-line-clamp: 1;
-            flex: 2;
+            flex: 2 1 0;
+            min-width: 0;
         }
 
         .form-grid.row-mode .form-item-meta {
-            flex: 2;
+            flex: 2 1 0;
+            min-width: 0;
             flex-direction: row;
             gap: 16px;
             align-items: center;
@@ -339,9 +350,18 @@
             padding: 0;
         }
 
+        .form-grid.row-mode .form-item-meta > div {
+            flex: 1 1 0;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
         .form-grid.row-mode .form-actions {
-            flex: 1;
+            flex: 1 1 0;
             margin-top: 0;
+            min-width: 0;
             max-width: 150px;
         }
 

@@ -46,7 +46,7 @@ from services.image_objects import (
 )
 from core.admin_modules import refresh_image_object_registry
 from services.image_types import parse_date_range_from_text
-from services.telegram_ui import with_survey_copy
+from services.telegram_ui import submission_form_line, with_survey_copy
 from services.normalizer import compute_laplacian_blur_score, normalize_image_to_webp, sanitize_and_normalize_image
 from services.online_and_ai_detector import compute_dhash_int, hamming_distance
 from services.privacy_crypto import generate_driver_tag, hash_phone, hash_plate
@@ -1418,13 +1418,9 @@ async def _evaluate(
         status_str = "REJECTED"
         reason_str = "Tài xế không đồng ý xử lý dữ liệu theo Nghị định 13."
     require_manual_review = bool(getattr(getattr(schema, "settings", None), "require_manual_review", True))
-    if (
-        require_manual_review
-        and is_approved
-        and not is_bypassed
-        and not is_dissent
-        and not input.is_test_mode
-    ):
+    # Test mode only selects storage/delivery; the form's review setting still wins,
+    # otherwise a "test" form silently auto-approves work that never gets reviewed.
+    if require_manual_review and is_approved and not is_bypassed and not is_dissent:
         status_str = "MANUAL_REVIEW"
         reason_str = "Phiếu khảo sát của bạn đã được ghi nhận. Ban Quản Trị đang tiến hành đối soát thủ công. Vui lòng mở Telegram @TrustBridgeVN_bot để nhận kết quả!"
     return SubmissionEvaluation(
@@ -1839,6 +1835,28 @@ async def _load_active_image_exceptions(db_pool, form_id):
     return embeddings, dhashes
 
 
+def _answer_summary_lines(schema: Any, answers: Mapping[str, Any], limit: int = 6) -> list[str]:
+    """Form-driven answer lines for the admin notice; never assumes income/vehicle fields."""
+    lines: list[str] = []
+    for question in (getattr(schema, "questions", None) or []):
+        qtype = str(getattr(getattr(question, "type", ""), "value", getattr(question, "type", "")) or "")
+        if qtype in ("signature", "camera_webrtc"):
+            continue
+        answer = answers.get(getattr(question, "id", ""))
+        if isinstance(answer, (list, tuple)):
+            answer = ", ".join(str(item) for item in answer if str(item).strip())
+        text = str(answer if answer is not None else "").strip()
+        if not text:
+            continue
+        if len(text) > 120:
+            text = text[:117] + "..."
+        title = str(getattr(question, "title", "") or getattr(question, "id", ""))
+        lines.append(f"• <b>{html.escape(title)}:</b> {html.escape(text)}")
+        if len(lines) >= limit:
+            break
+    return lines
+
+
 def _legacy_work(
     input: SubmissionInput, deps: SubmissionDependencies, prepared: _Prepared,
     eval: SubmissionEvaluation, record: dict,
@@ -1850,22 +1868,29 @@ def _legacy_work(
     auto_verdict = ai_res.get("status", "MANUAL_REVIEW")
     auto_reason = ai_res.get("reason", "")
     auto_emoji = "✅" if str(auto_verdict).upper() == "APPROVED" else "❌"
-    raw_vehicle = input.vehicle_type or ai_res.get("vehicle_type")
-    vehicle_type_val = _normalize_vehicle_type(raw_vehicle) if raw_vehicle else "Chưa xác định"
     tot_gross_val = record["total_gross_revenue"]
     driver_info_line = (
         f"• <b>Tài xế:</b> <b>{html.escape(driver_name)}</b> (<code>{driver_phone or 'N/A'}</code>)"
         if driver_name and driver_name not in ("Tài xế", "Tài xế Bí Mật", "N/A", "[SCRUBBED]")
         else f"• <b>Số điện thoại:</b> <code>{driver_phone or 'N/A'}</code>"
     )
-    verdict_text = (
-        f"{status_emoji} <b>PHIẾU KHẢO SÁT CHỜ DUYỆT THỦ CÔNG #{submission_id}</b>\n\n"
-        f"{driver_info_line}\n"
-        f"• <b>Loại xe:</b> <code>{vehicle_type_val}</code>\n"
-        f"• <b>Đề xuất từ Hệ thống AI:</b> {auto_emoji} <b>{auto_verdict}</b> ({html.escape(auto_reason) if auto_reason else 'Đạt chuẩn'})\n"
-        f"• <b>Doanh thu:</b> <b>{tot_gross_val:,} VNĐ</b>\n"
-        f"• <b>Trạng thái:</b> <code>{status_str}</code>"
+    headline = "PHIẾU CHỜ DUYỆT THỦ CÔNG" if status_str == "MANUAL_REVIEW" else "PHIẾU KHẢO SÁT MỚI"
+    verdict_lines = [f"{status_emoji} <b>{headline} #{submission_id}</b>", ""]
+    form_line = submission_form_line(input.form_id)
+    if form_line:
+        verdict_lines.append(form_line)
+    verdict_lines.append(driver_info_line)
+    if input.collaborator_id:
+        verdict_lines.append(f"• <b>CTV:</b> <code>{html.escape(str(input.collaborator_id))}</code>")
+    verdict_lines.extend(_answer_summary_lines(input.delivery_schema or input.schema, prepared.form_data))
+    if tot_gross_val:
+        verdict_lines.append(f"• <b>Doanh thu:</b> <b>{tot_gross_val:,} VNĐ</b>")
+    verdict_lines.append(
+        f"• <b>Đề xuất từ Hệ thống AI:</b> {auto_emoji} <b>{auto_verdict}</b> "
+        f"({html.escape(auto_reason) if auto_reason else 'Đạt chuẩn'})"
     )
+    verdict_lines.append(f"• <b>Trạng thái:</b> <code>{status_str}</code>")
+    verdict_text = "\n".join(verdict_lines)
     admin_markup = with_survey_copy({
         "inline_keyboard": [
             [

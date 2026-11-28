@@ -532,6 +532,100 @@ async def test_income_slots_validate_against_their_own_month():
 
 
 @pytest.mark.asyncio
+async def test_test_mode_still_requires_the_configured_manual_review(dependencies, monkeypatch):
+    """A test form must not auto-approve work its settings say admins must review."""
+    from services.form_engine import FormQuestion, FormSchema, FormSettings, ImageCheckConfig
+
+    camera = FormQuestion(id="proof", title="Evidence", type="camera_webrtc", required=True, image_slots=[
+        {"title": "Performance", "object_type": "gsm_performance", "required": True},
+    ])
+    schema = FormSchema(form_id="test-review", title="Test review", questions=[camera], settings=FormSettings(
+        decree13_required=False, is_test_mode=True, require_manual_review=True,
+        image_checks=ImageCheckConfig(enable_blur_check=False, enable_vehicle_match=False, enable_anti_fraud=False),
+    ))
+    vision = SimpleNamespace(
+        classify_image_role=AsyncMock(return_value="unknown"),
+        extract_object_fields=AsyncMock(return_value=PERFORMANCE_FIELDS),
+    )
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
+    saved = []
+    deps = replace(dependencies, vision=vision, append_dev_record=saved.append, schedule_legacy=lambda _: None)
+    monkeypatch.setattr(pipeline, "compute_dinov2_embedding", lambda _image: [1.0])
+    request = pipeline.SubmissionInput(
+        form_id=schema.form_id, schema=schema, is_test_mode=True,
+        uploads=(pipeline.SubmissionUpload("proof", 0, "perf.png", buffer.getvalue()),),
+    )
+
+    async with embedding_executor_lifespan():
+        result = await pipeline.process_submission(request, deps)
+
+    assert result.status == "MANUAL_REVIEW", result.response
+    assert saved[0]["status"] == "MANUAL_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_configured_manual_review_can_be_switched_off_for_testing(dependencies):
+    """`require_manual_review=False` still auto-approves, so testers can iterate fast."""
+    from services.form_engine import FormSchema, FormSettings, ImageCheckConfig
+
+    schema = FormSchema(form_id="fast", title="Fast", questions=[], settings=FormSettings(
+        decree13_required=False, is_test_mode=True, require_manual_review=False,
+        image_checks=ImageCheckConfig(enable_blur_check=False, enable_vehicle_match=False, enable_anti_fraud=False),
+    ))
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
+    deps = replace(dependencies, vision=SimpleNamespace(), append_dev_record=lambda _: None, schedule_legacy=lambda _: None)
+    result = await pipeline.process_submission(
+        pipeline.SubmissionInput(
+            form_id=schema.form_id, schema=schema, is_test_mode=True,
+            uploads=(pipeline.SubmissionUpload("q1", 0, "photo.png", buffer.getvalue()),),
+        ),
+        deps,
+    )
+    assert result.status == "APPROVED", result.response
+
+
+@pytest.mark.asyncio
+async def test_admin_notice_uses_form_answers_not_hardcoded_income_or_vehicle(dependencies, monkeypatch):
+    """The admin Telegram text lists the form's own fields, including CTV attribution."""
+    from services.form_engine import FormQuestion, FormSchema, FormSettings, ImageCheckConfig, QuestionType
+
+    schema = FormSchema(form_id="camp", title="Camp", questions=[
+        FormQuestion(id="phone_q", title="Số điện thoại", type=QuestionType.TEXT, required=True),
+        FormQuestion(id="brand_q", title="Hãng xe", type=QuestionType.TEXT, required=False),
+    ], settings=FormSettings(
+        decree13_required=False, is_test_mode=True, require_manual_review=True,
+        image_checks=ImageCheckConfig(enable_blur_check=False, enable_vehicle_match=False, enable_anti_fraud=False),
+    ))
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
+    captured = []
+    deps = replace(
+        dependencies, vision=SimpleNamespace(),
+        append_dev_record=lambda _: None, schedule_legacy=captured.append,
+    )
+    monkeypatch.setattr(pipeline, "compute_dinov2_embedding", lambda _image: [1.0])
+    request = pipeline.SubmissionInput(
+        form_id=schema.form_id, schema=schema, is_test_mode=True, collaborator_id="CTV01",
+        fields={"phone_q": "0912345678", "brand_q": "VinFast VF5"}, driver_phone="0912345678",
+        uploads=(pipeline.SubmissionUpload("phone_q", 0, "photo.png", buffer.getvalue()),),
+    )
+
+    async with embedding_executor_lifespan():
+        result = await pipeline.process_submission(request, deps)
+
+    text = captured[0].admin_text
+    assert result.status == "MANUAL_REVIEW"
+    assert "Số điện thoại" in text and "0912345678" in text
+    assert "Hãng xe" in text and "VinFast VF5" in text
+    assert "CTV:" in text and "CTV01" in text
+    assert "Loại xe" not in text and "Phương tiện" not in text
+    assert "Doanh thu" not in text
+    assert "Biểu mẫu:" in text
+
+
+@pytest.mark.asyncio
 async def test_required_custom_slot_cannot_disappear_from_audit():
     from services.form_engine import FormQuestion
 
