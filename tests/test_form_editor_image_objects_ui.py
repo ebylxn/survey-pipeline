@@ -330,7 +330,8 @@ check(
 
 rendered = t.renderSlotObjectControl(0, 0, state.object_config, item);
 check(rendered.includes('removeSlotObjectConstraint(0, 0, &quot;constraints&quot;, 0)'), 'remove button missing');
-check(rendered.includes('placeholder="9, 10"'), 'in placeholder missing');
+check(rendered.includes('placeholder="9, 10  (dùng &quot;a,b&quot;'), 'in placeholder missing');
+check(rendered.includes('dấu phẩy'), 'comma quoting hint missing');
 check(rendered.includes('<option value="period_type" selected>'), 'field select lost its state');
 check(rendered.includes('<option value="in" selected>'), 'op select lost its state');
 

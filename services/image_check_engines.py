@@ -518,8 +518,44 @@ def _period_facts(extraction: Dict[str, Any], config: Dict[str, Any]) -> Dict[st
     return facts
 
 
+def split_list_values(value: Any) -> List[str]:
+    """Split a comma list, honoring `"quoted, values"` and `\\"` / `\\\\` escapes.
+
+    Plain `9,10` yields `['9', '10']`; `"a,b",c` yields `['a,b', 'c']`. A
+    backslash only escapes a quote or another backslash, so paths survive.
+    """
+    text = str(value or "")
+    parts: List[str] = []
+    current: List[str] = []
+    quoted = False
+    escaped = False
+    for char in text:
+        if escaped:
+            if char in ('"', "\\"):
+                current.append(char)
+            else:
+                current.extend(("\\", char))
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            quoted = not quoted
+            continue
+        if char == "," and not quoted:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    if escaped:
+        current.append("\\")
+    parts.append("".join(current))
+    return [part.strip() for part in parts if part.strip()]
+
+
 def _split_values(value: Any) -> List[str]:
-    return [part.strip() for part in str(value).split(",") if part.strip()]
+    return split_list_values(value)
 
 
 def _constraint_actual(facts: Dict[str, Any], field: str) -> Any:
@@ -709,7 +745,7 @@ def engine_enum(params: Dict[str, Any], extraction: Dict[str, Any], context: Dic
     field = str(params.get("field") or "")
     allowed = params.get("allowed") or params.get("options") or []
     if isinstance(allowed, str):
-        allowed = [item.strip() for item in allowed.split(",") if item.strip()]
+        allowed = split_list_values(allowed)
     allowed_norm = {str(item).strip().lower() for item in allowed}
     value = _field_value(extraction, field)
     if _is_empty(value):

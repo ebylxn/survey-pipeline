@@ -602,6 +602,30 @@ def test_constraints_engine_numeric_ops_accept_list_facts():
     ]))["passed"] is True
 
 
+def test_split_list_values_supports_quotes_and_escapes():
+    from services.image_check_engines import split_list_values
+
+    assert split_list_values("9,10") == ["9", "10"]
+    assert split_list_values(" 9 , 10 ") == ["9", "10"]
+    assert split_list_values('"a,b",c') == ["a,b", "c"]
+    assert split_list_values('"say \\"hi\\"",x') == ['say "hi"', "x"]
+    assert split_list_values('"back\\\\slash"') == ["back\\slash"]
+    assert split_list_values("plain\\path") == ["plain\\path"]
+    assert split_list_values("trailing\\") == ["trailing\\"]
+    assert split_list_values("") == []
+    assert split_list_values(None) == []
+
+
+def test_quoted_constraint_value_keeps_the_comma_inside_one_token():
+    from services.image_check_engines import engine_enum
+
+    # 'A,B' is one allowed value, not two.
+    result = engine_enum({"field": "detected_app", "allowed": '"A,B",XANH_SM'}, {"detected_app": "a,b"}, {})
+    assert result["passed"] is True
+    rejected = engine_enum({"field": "detected_app", "allowed": '"A,B",XANH_SM'}, {"detected_app": "A"}, {})
+    assert rejected["passed"] is False
+
+
 def test_constraints_engine_rejects_empty_value_and_unknown_field():
     base = {"gross_revenue": 5_000_000, "net_income": 4_000_000, "discount_and_tax": 1_000_000, "period": "28/09 - 04/10"}
     empty = run_object_checks("weekly_income", base, _weekly_config(constraints=[

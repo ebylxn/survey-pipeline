@@ -1269,8 +1269,8 @@
         }
         function constraintValuePlaceholder(op, fieldKey) {
             if (fieldKey !== 'value') return '';
-            if (op === 'in') return '9, 10';
-            return '';
+            if (op === 'in') return '9, 10  (dùng "a,b" nếu giá trị có dấu phẩy)';
+            return 'Dùng "a,b" nếu giá trị có dấu phẩy; \\" và \\\\ để thoát dấu ngoặc kép / gạch chéo';
         }
         function renderSlotObjectConstraintField(qidx, sidx, key, ridx, row, fieldDef, op) {
             const fieldKey = String(fieldDef.key || '');
