@@ -513,6 +513,38 @@ def test_constraints_engine_period_facts():
     assert in_pass["passed"] is True, in_pass["reasons"]
 
 
+def test_constraints_engine_accepts_comma_separated_months():
+    """The Nov campaign stores '9,10' so September and October weeks both pass."""
+    base = {"gross_revenue": 5_000_000, "net_income": 4_000_000, "discount_and_tax": 1_000_000, "detected_app": "XANH_SM", "is_legible": True, "confidence_score": 0.95}
+    september = {**base, "period": "01/09/2026 - 07/09/2026"}
+    october = {**base, "period": "01/10/2026 - 07/10/2026"}
+    november = {**base, "period": "01/11/2026 - 07/11/2026"}
+    both_months = [
+        {"field": "period_months", "op": "contains", "value": "9,10"},
+        {"field": "period_years", "op": "contains", "value": 2026},
+    ]
+
+    for extraction in (september, october):
+        result = run_object_checks("weekly_income", extraction, _weekly_config(constraints=both_months))
+        assert result["passed"] is True, result["reasons"]
+
+    outside = run_object_checks("weekly_income", november, _weekly_config(constraints=both_months))
+    assert outside["passed"] is False
+    assert "Ràng buộc không đạt" in outside["reasons"][0]
+
+    # A single-month equality must match a one-element month list, not its repr.
+    september_only = run_object_checks("weekly_income", september, _weekly_config(constraints=[
+        {"field": "period_months", "op": "equals", "value": "9"},
+        {"field": "period_years", "op": "equals", "value": "2026"},
+    ]))
+    assert september_only["passed"] is True, september_only["reasons"]
+
+    october_against_september = run_object_checks("weekly_income", october, _weekly_config(constraints=[
+        {"field": "period_months", "op": "equals", "value": "9"},
+    ]))
+    assert october_against_september["passed"] is False
+
+
 def test_constraints_engine_rejects_empty_value_and_unknown_field():
     base = {"gross_revenue": 5_000_000, "net_income": 4_000_000, "discount_and_tax": 1_000_000, "period": "28/09 - 04/10"}
     empty = run_object_checks("weekly_income", base, _weekly_config(constraints=[

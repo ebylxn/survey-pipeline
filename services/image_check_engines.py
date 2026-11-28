@@ -538,6 +538,20 @@ def _compare_scalar(actual: Any, expected: Any) -> bool:
     return str(actual).strip().lower() == str(expected).strip().lower()
 
 
+def _expected_parts(raw_value: Any) -> List[str]:
+    """One expected value, or every comma-separated alternative ('9,10')."""
+    parts = _split_values(raw_value)
+    return parts or [str(raw_value)]
+
+
+def _matches_any(actual: Any, raw_value: Any) -> bool:
+    """True when the fact (scalar or list) matches any listed expected value."""
+    parts = _expected_parts(raw_value)
+    if isinstance(actual, (list, tuple, set)):
+        return any(_compare_scalar(item, part) for item in actual for part in parts)
+    return any(_compare_scalar(actual, part) for part in parts)
+
+
 def _evaluate_constraint(constraint: Dict[str, Any], facts: Dict[str, Any]) -> Tuple[bool, str]:
     if not isinstance(constraint, dict):
         return False, "Ràng buộc không hợp lệ: mục ràng buộc phải là object."
@@ -555,14 +569,15 @@ def _evaluate_constraint(constraint: Dict[str, Any], facts: Dict[str, Any]) -> T
     label = f"{field} {op} {raw_value}"
 
     if op == "equals":
-        passed = _compare_scalar(actual, raw_value)
+        passed = _matches_any(actual, raw_value)
     elif op == "not_equals":
-        passed = not _compare_scalar(actual, raw_value)
+        passed = not _matches_any(actual, raw_value)
     elif op == "contains":
         if isinstance(actual, (list, tuple, set)):
-            passed = any(_compare_scalar(item, raw_value) for item in actual)
+            passed = _matches_any(actual, raw_value)
         else:
-            passed = str(raw_value).strip().lower() in str(actual or "").lower()
+            text = str(actual or "").lower()
+            passed = any(str(part).strip().lower() in text for part in _expected_parts(raw_value))
     elif op == "in":
         passed = any(_compare_scalar(actual, option) for option in _split_values(raw_value))
     else:

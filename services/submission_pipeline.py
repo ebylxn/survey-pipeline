@@ -608,12 +608,13 @@ async def _audit_camera_question(
         extraction_positions.append(matched_profile_idx)
     if income_object is not None:
         for i_pos, local_idx in enumerate(matched_income_indices):
+            slot_idx = items[local_idx]["slot_index"]
             extraction_tasks.append(
                 _extract_image_object(
                     vision_client,
                     local_norm[local_idx],
                     income_object,
-                    income_config,
+                    _slot_config(slots[slot_idx]) if slot_idx < len(slots) else income_config,
                     week_idx=i_pos + 1,
                     prompt_override=prompt_by_object.get(income_object.id),
                 )
@@ -726,10 +727,11 @@ async def _audit_camera_question(
         if not isinstance(extracted, dict):
             continue
         slot_idx = items[local_idx]["slot_index"]
+        slot_cfg = _slot_config(slots[slot_idx]) if slot_idx < len(slots) else income_config
         object_check = None
         if income_object is not None:
             try:
-                object_check = run_definition_checks(income_object, extracted, income_config)
+                object_check = run_definition_checks(income_object, extracted, slot_cfg)
             except ImageObjectDefinitionError as exc:
                 logger.error("[IMAGE OBJECTS] income check unusable for %s: %s", question_id, exc)
                 object_check = {"passed": False, "reasons": [f"Cấu hình kiểm tra ảnh không hợp lệ: {exc}"], "failures": [], "engines": []}

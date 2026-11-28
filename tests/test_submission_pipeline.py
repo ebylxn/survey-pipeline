@@ -487,6 +487,51 @@ async def test_same_custom_object_uses_each_slots_month_and_prompt():
 
 
 @pytest.mark.asyncio
+async def test_income_slots_validate_against_their_own_month():
+    """Reported Nov-test bug: slot 1 is September while slot 0 is October."""
+    from services.form_engine import FormQuestion
+
+    def month_config(month):
+        return {"period_type": "WEEKLY", "constraints": [
+            {"field": "period_months", "op": "contains", "value": month},
+            {"field": "period_years", "op": "contains", "value": 2026},
+        ]}
+
+    def income(period):
+        return {
+            "period": period, "period_raw_text": period, "period_type": "WEEKLY",
+            "gross_revenue": 3_000_000, "net_income": 2_500_000, "discount_and_tax": 500_000,
+            "total_trips": 20, "detected_app": "XANH_SM", "is_authentic_gsm_ui": True,
+            "is_legible": True, "confidence_score": 0.99, "is_manipulated_or_photoshopped": False,
+        }
+
+    question = FormQuestion(id="cau_19", title="5 tuần", type="camera_webrtc", image_slots=[
+        {"title": "Tuần 1", "object_type": "weekly_income", "required": True, "object_config": month_config("10")},
+        {"title": "Tuần 2", "object_type": "weekly_income", "required": True, "object_config": month_config("9")},
+    ])
+    items = [{"flat_index": idx, "slot_index": idx, "filename": f"week{idx}.png"} for idx in range(2)]
+    october, september = income("04/10/2026 - 10/10/2026"), income("06/09/2026 - 12/09/2026")
+
+    vision = SimpleNamespace(
+        classify_image_role=AsyncMock(return_value="app_income"),
+        ocr_driver_app_income=AsyncMock(side_effect=[october, september]),
+    )
+    audit = await pipeline._audit_camera_question(vision, question, items, {0: b"a", 1: b"b"})
+
+    assert audit["violation"] is None, audit["violation"]
+    assert [result["passed"] for result in audit["image_object_results"]] == [True, True]
+    second_prompt = vision.ocr_driver_app_income.await_args_list[1].kwargs["prompt"]
+    assert '"9"' in second_prompt
+
+    # The same September photo in the October slot must fail on that slot only.
+    vision.ocr_driver_app_income = AsyncMock(side_effect=[october, october])
+    mismatch = await pipeline._audit_camera_question(vision, question, items, {0: b"a", 1: b"b"})
+    assert mismatch["violation"] is not None
+    assert mismatch["violation"]["failed_slot"] == 1
+    assert "period_months" in mismatch["violation"]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_required_custom_slot_cannot_disappear_from_audit():
     from services.form_engine import FormQuestion
 
